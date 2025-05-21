@@ -3,6 +3,21 @@
         {
             "type": "aws-sam",
             "request": "direct-invoke",
+            "name": "LexAgenteVirtual_SAC:lambda_function.lambda_handler (python3.13)",
+            "invokeTarget": {
+                "target": "code",
+                "projectRoot": "${workspaceFolder}/LexAgenteVirtual_SAC",
+                "lambdaHandler": "lambda_function.lambda_handler"
+            },
+            "lambda": {
+                "runtime": "python3.13",
+                "payload": {},
+                "environmentVariables": {}
+            }
+        },
+        {
+            "type": "aws-sam",
+            "request": "direct-invoke",
             "name": "GenerarPDF:lambda_function.lambda_handler (python3.13)",
             "invokeTarget": {
                 "target": "code",
