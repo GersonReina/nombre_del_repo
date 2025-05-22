@@ -13,7 +13,9 @@ def lambda_handler(event, context):
         session_attributes = session_state.get("sessionAttributes", {}) or {}
         input_transcript = event.get("inputTranscript", "").lower()
         slots = intent.get("slots", {})
-
+        
+        # Obtener config solo una vez
+        config = obtener_secret("main/LexAgenteVirtualSAC")
         # -----------------------------
         # ¿Está esperando una respuesta final tipo "¿puedo ayudarte con algo más?"?
         # -----------------------------
@@ -156,15 +158,12 @@ def lambda_handler(event, context):
                 print("❌ Error en ConsultaInfoPlan:", str(e))
                 return responder("Lo siento, ha ocurrido un error al procesar tu solicitud. Intenta nuevamente más tarde.", session_attributes, intent_name)
 
-
-
-
         # -----------------------------
         # 4️⃣ FLUJO: FQABodytech
         # -----------------------------
         if intent_name == "FQABodytech":
             try:
-                config = obtener_secret("main/LexAgenteVirtualSAC")
+                
                 prompt = get_prompt_por_intent(intent_name, input_transcript)
                 respuesta_kb = consultar_kb_bedrock(prompt, config["BEDROCK_KB_ID_FQABodytech"])
                 mensaje_final = f"{respuesta_kb.strip()}\n\n¿Puedo ayudarte con algo más? 🤗"
@@ -180,7 +179,6 @@ def lambda_handler(event, context):
         # -----------------------------
         if intent_name == "Venta":
             try:
-                config = obtener_secret("main/LexAgenteVirtualSAC")
                 prompt = get_prompt_por_intent(intent_name, input_transcript)
                 kb_id = config.get("BEDROCK_KB_ID_Venta")
 
@@ -248,13 +246,11 @@ def lambda_handler(event, context):
                 print("❌ Error en CongelarPlan:", str(e))
                 return responder("Lo siento, hubo un error al validar la congelación de tu plan. Intenta más tarde.", session_attributes, intent_name)
 
-
         # -----------------------------
         # FLUJO: FQAReferidos
         # -----------------------------
         if intent_name == "FQAReferidos":
             try:
-                config = obtener_secret("main/LexAgenteVirtualSAC")
                 prompt = get_prompt_por_intent(intent_name, input_transcript)
                 respuesta_kb = consultar_kb_bedrock(prompt, config["BEDROCK_KB_ID_FQAReferidos"])
                 mensaje_final = respuesta_kb.strip()
@@ -541,7 +537,6 @@ def validar_documento_usuario(slots, session_attributes, input_transcript, inten
     return document_type_id, document_number, session_attributes, None
 
 
-
 ###############################
 # Consulta Plan               # 
 ###############################
@@ -705,9 +700,6 @@ def obtener_respuesta_congelacion(is_recurring):
 
     return contenido
 
-
-
-
 # -----------------------------
 # PROMPT (mantener igual)
 # -----------------------------
@@ -839,5 +831,3 @@ agrega al final ¿Puedo ayudarte en algo más? 🤗
 
 {contenido}
 """
-
-
