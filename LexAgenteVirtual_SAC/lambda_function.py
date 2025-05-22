@@ -2,8 +2,6 @@ import json
 import boto3
 import requests
 import os
-from redshift_utils import consultar_planes_redshift
-
 
 def lambda_handler(event, context):
     print("📥 Evento recibido:", json.dumps(event, indent=2))
@@ -135,30 +133,21 @@ def lambda_handler(event, context):
                     return respuesta_incompleta
 
                 print(f"✅ Tipo documento mapeado: {document_type_id}, Número: {document_number}")
-                
+                print("🕐 Enviando mensaje de espera al usuario...")
+                respuesta_espera = responder("Un momento por favor, estamos consultando la información de tu plan...", session_attributes, intent_name)
+                print("🟡 Esperando mientras se realiza consulta API")
 
-                # 2. Consultar plan en redshift
-                resultado = consultar_planes_redshift(document_type_id, document_number)
-                if resultado:
-                    name, plan, status, date_start, date_end = resultado
-                    datos_plan = {
-                        "data": {
-                            "name": name,
-                            "plans": [{
-                             "label": plan,
-                            "status": status,
-                            "date_start": date_start,
-                            "date_end": date_end
-                            }]
-                        }
-                    }
+                # 2. Consultar plan
+                datos_plan, error_msg = consultar_plan(document_type_id, document_number)
+
+                if error_msg:
+                    return responder(error_msg, session_attributes, intent_name)
+
                 # 3. Guardar info del plan en sesión
-                    session_attributes["datos_plan_json"] = json.dumps(datos_plan)
+                session_attributes["datos_plan_json"] = json.dumps(datos_plan)
 
                 # 4. Generar respuesta usando Bedrock (sin KB)
-                    mensaje_final = respuesta_bedrock(intent_name, datos_plan)
-                else:
-                    mensaje_final = "No encontramos información del plan asociada a ese documento. Verifica los datos o intenta más tarde."
+                mensaje_final = respuesta_bedrock(intent_name, datos_plan)
                 session_attributes["esperando_respuesta_final"] = "true"
 
                 return responder(mensaje_final, session_attributes, intent_name)
