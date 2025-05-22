@@ -2,6 +2,7 @@ import json
 import boto3
 import requests
 import os
+from utils import obtener_secret
 from utils import responder, cerrar_conversacion, mostrar_sugerencias
 
 def lambda_handler(event, context):
@@ -42,7 +43,7 @@ def lambda_handler(event, context):
             if not session_attributes.get("politicas_mostradas"):
                 session_attributes["politicas_mostradas"] = "true"
                 return responder(
-                    "Bienvenid@ al Servicio al Cliente de MiEmpresa! "
+                    "Bienvenid@ al Servicio al Cliente de Bodytech! "
                     "Al continuar con esta comunicación estás de acuerdo con nuestra política de manejo de datos: "
                     "https://miempresa/tratamiento-de-informacion\n\n¿Deseas continuar?",
                     session_attributes,
@@ -115,7 +116,7 @@ def lambda_handler(event, context):
             # Primer contacto con esta intención
             session_attributes["politicas_mostradas"] = "true"
             mensaje = (
-                "Bienvenid@ al Servicio al Cliente de MiEmpresa! "
+                "Bienvenid@ al Servicio al Cliente de Bodytech! "
                 "Al continuar con esta comunicación estás de acuerdo con nuestra política de manejo de datos: "
                 "https://miempresa/tratamiento-de-informacion\n\n¿Deseas continuar?"
             )
@@ -283,15 +284,6 @@ def lambda_handler(event, context):
 # FUNCIONES AUXILIARES  #
 # --------------------- #
 
-##################
-# Obtener Secret #
-##################
-
-def obtener_secret(secret_name):
-    print(f"🔐 Obteniendo secret: {secret_name}")
-    client = boto3.client('secretsmanager')
-    response = client.get_secret_value(SecretId=secret_name)
-    return json.loads(response['SecretString'])
 
 ########################
 # Consultar KB Bedrock #
