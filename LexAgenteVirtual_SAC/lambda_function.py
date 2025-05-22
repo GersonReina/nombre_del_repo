@@ -2,6 +2,7 @@ import json
 import boto3
 import requests
 import os
+from utils import responder, cerrar_conversacion, mostrar_sugerencias
 
 def lambda_handler(event, context):
     print("📥 Evento recibido:", json.dumps(event, indent=2))
@@ -158,6 +159,9 @@ def lambda_handler(event, context):
                 print("❌ Error en ConsultaInfoPlan:", str(e))
                 return responder("Lo siento, ha ocurrido un error al procesar tu solicitud. Intenta nuevamente más tarde.", session_attributes, intent_name)
 
+
+
+
         # -----------------------------
         # 4️⃣ FLUJO: FQABodytech
         # -----------------------------
@@ -246,6 +250,7 @@ def lambda_handler(event, context):
                 print("❌ Error en CongelarPlan:", str(e))
                 return responder("Lo siento, hubo un error al validar la congelación de tu plan. Intenta más tarde.", session_attributes, intent_name)
 
+
         # -----------------------------
         # FLUJO: FQAReferidos
         # -----------------------------
@@ -309,67 +314,6 @@ def consultar_kb_bedrock(prompt, kb_id):
     )
     print("✅ Respuesta recibida desde Bedrock")
     return response["output"]["text"]
-
-#############
-# Respuesta #
-#############
-
-def responder(mensaje, session_attributes, intent_name):
-    print("📤 Enviando respuesta a Lex:", mensaje)
-    return {
-        "sessionState": {
-            "dialogAction": {"type": "Close"},
-            "intent": {
-                "name": intent_name,
-                "state": "Fulfilled"
-            },
-            "sessionAttributes": session_attributes
-        },
-        "messages": [
-            {
-                "contentType": "PlainText",
-                "content": mensaje
-            }
-        ]
-    }
-
-#######################
-# Cerrar Conversacion #
-#######################
-
-def cerrar_conversacion(mensaje, intent_name):
-    print("🔒 Cerrando conversación:", mensaje)
-    return {
-        "sessionState": {
-            "dialogAction": {"type": "Close"},
-            "intent": {
-                "name": intent_name,
-                "state": "Fulfilled"
-            },
-            "sessionAttributes": {}
-        },
-        "messages": [
-            {
-                "contentType": "PlainText",
-                "content": mensaje
-            }
-        ]
-    }
-
-###
-# Sugerencias de intension
-###
-
-def mostrar_sugerencias(session_attributes):
-    sugerencias = (
-        "Lo siento, no logré identificar tu solicitud 🤔.\n"
-        "Pero puedo ayudarte con:\n"
-        "📄 Preguntas frecuentes\n"
-        "🛍️ Comprar un plan\n"
-        "📅 Información sobre tu plan\n\n"
-        "¿Sobre cuál tema necesitas ayuda?"
-    )
-    return responder(sugerencias, session_attributes, "FallbackIntent")
 
 ###
 # Respuesta Post Pregunta Adicional
@@ -537,6 +481,7 @@ def validar_documento_usuario(slots, session_attributes, input_transcript, inten
     return document_type_id, document_number, session_attributes, None
 
 
+
 ###############################
 # Consulta Plan               # 
 ###############################
@@ -699,6 +644,9 @@ def obtener_respuesta_congelacion(is_recurring):
 
 
     return contenido
+
+
+
 
 # -----------------------------
 # PROMPT (mantener igual)
