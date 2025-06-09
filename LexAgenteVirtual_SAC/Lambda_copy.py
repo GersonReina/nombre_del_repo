@@ -1,12 +1,13 @@
 import json
-import boto3
-import requests
-import os
 import traceback
-from redshift_utils import consultar_planes_redshift,get_redshift_connection
-from utils import resumen_planes_para_bedrock, convertir_fechas_a_str
-from utils import responder, cerrar_conversacion, mostrar_sugerencias, obtener_secret
-
+from utils import resumen_planes_para_bedrock, convertir_fechas_a_str, consultar_plan, responder
+from utils import responder, cerrar_conversacion, mostrar_sugerencias, es_fecha_valida
+from prompts import get_prompt_por_intent
+from respuestas import respuesta_bedrock, obtener_respuesta_congelacion, obtener_respuesta_bedrock_desde_lex
+from services import validar_documento_usuario, consultar_kb_bedrock, manejar_respuesta_post_pregunta_adicional,obtener_info_sedes
+from services import validar_ciudad_usuario, obtener_id_sede, obtener_id_actividad
+from redshift_utils import consultar_sedes_por_ciudad_id, consultar_clases_por_sede_id, consultar_horarios_por_sede_clase_fecha
+from secret import obtener_secret
 
 def lambda_handler(event, context):
     print("📥 Evento recibido:", json.dumps(event, indent=2))
@@ -19,13 +20,17 @@ def lambda_handler(event, context):
         input_transcript = event.get("inputTranscript", "").lower()
         slots = intent.get("slots", {})
 
+        invocation_source = event.get("invocationSource", "")
         # -----------------------------
         # ¿Está esperando una respuesta final tipo "¿puedo ayudarte con algo más?"?
         # -----------------------------
         if session_attributes.get("esperando_respuesta_final") == "true":
             print("🔄 Procesando posible intención post-respuesta...")
             session_attributes.pop("esperando_respuesta_final", None)
-            return manejar_respuesta_post_pregunta_adicional(input_transcript, session_attributes)
+            return manejar_respuesta_post_pregunta_adicional(
+                input_transcript,
+                session_attributes,
+           )
 
         # 🔄 Si la intención cambia, limpiamos la bandera de espera de respuesta final
         if session_attributes.get("esperando_respuesta_final") == "true" and intent_name != "SaludoHabeasData":
@@ -35,49 +40,171 @@ def lambda_handler(event, context):
         print(f"📌 Frase del usuario: {input_transcript}")
         print(f"📌 Session Attributes actuales: {session_attributes}")
 
+
         # -----------------------------
         # 🔒 Validación centralizada de aceptación de políticas
         # -----------------------------
         if session_attributes.get("acepto_politicas") != "true" and intent_name != "SaludoHabeasData":
-            print("🔁 Redirigiendo a SaludoHabeasData porque aún no se aceptan políticas.")
+           print("🔁 Redirigiendo a SaludoHabeasData porque aún no se aceptan políticas.")
 
-            if not session_attributes.get("politicas_mostradas"):
-                session_attributes["politicas_mostradas"] = "true"
-                return responder(
-                    "Bienvenid@ al Servicio al Cliente de MiEmpresa! "
-                    "Al continuar con esta comunicación estás de acuerdo con nuestra política de manejo de datos: "
-                    "https://miempresa/tratamiento-de-informacion\n\n¿Deseas continuar?",
-                    session_attributes,
-                    "SaludoHabeasData"
-                )
+    # Guarda slots/documento en sesión si existen y aún no están guardados
+           if slots:
+              session_attributes["slots_previos"] = json.dumps(slots)
+           if session_attributes.get("document_type_id") is None and slots.get("TipoDocumento"):
+              session_attributes["document_type_id"] = slots["TipoDocumento"].get("value", {}).get("interpretedValue")
+           if session_attributes.get("document_number") is None and slots.get("NumeroDocumento"):
+              session_attributes["document_number"] = slots["NumeroDocumento"].get("value", {}).get("interpretedValue")
 
-            # Usuario acepta las políticas
-            if any(p in input_transcript for p in ["si", "sí", "acepto", "de acuerdo", "vale", "claro", "ok", "bueno", "listo", "está bien"]):
+    # Si nunca se mostraron las políticas, las mostramos y marcamos como mostradas
+           if session_attributes.get("politicas_mostradas") != "true":
+              session_attributes["politicas_mostradas"] = "true"
+              return responder(
+            "Bienvenid@ al Servicio al Cliente de Bodytech! "
+            "Al continuar con esta comunicación estás de acuerdo con nuestra política de manejo de datos: "
+            "https://bodytech.com.co/tratamiento-de-informacion\n\n¿Deseas continuar?",
+            session_attributes,
+            "SaludoHabeasData"
+        )
+
+    # Si ya se mostraron, procesamos la respuesta del usuario
+           if any(p in input_transcript for p in ["si", "sí", "acepto", "de acuerdo", "vale", "claro", "ok", "bueno", "listo", "está bien"]):
                 session_attributes["acepto_politicas"] = "true"
+        # Cuando acepta, redirige a la intención original y usa los datos guardados
                 return {
-                    "sessionState": {
-                        "dialogAction": {"type": "ElicitIntent"},
-                        "intent": {"name": "SaludoHabeasData", "state": "Fulfilled"},
-                        "sessionAttributes": session_attributes
-                    },
-                    "messages": [
-                        {
-                            "contentType": "PlainText",
-                            "content": "¡Gracias por aceptar nuestras políticas! ¿Dime en qué te puedo ayudar?"
-                        }
-                    ]
-                }
+            "sessionState": {
+                "dialogAction": {"type": "ElicitIntent"},
+                "sessionAttributes": session_attributes
+            },
+            "messages": [
+                {
 
-            # Usuario rechaza las políticas
-            if any(p in input_transcript for p in ["no", "rechazo", "no acepto"]):
-                return cerrar_conversacion(
-                    "Gracias por contactarte con nosotros. Lamentablemente no podemos continuar si no aceptas nuestras políticas de tratamiento de datos.",
-                    "SaludoHabeasData"
+                    "contentType": "PlainText",
+                    "content": (
+                        "¡Gracias por aceptar nuestras políticas! ✅\n\n"
+                        "¿En qué te puedo ayudar?\n\n"
+                        "Algunas sugerencias:\n"
+                        "• Consulta de información de tu plan\n"
+                        "• Preguntas frecuentes sobre Bodytech\n"
+                        "• Información sobre ventas y promociones\n"
+                        "• Consulta de referidos"
+                    )
+                }
+            ]
+        }
+
+           if any(p in input_transcript for p in ["no", "rechazo", "no acepto"]):
+                 return cerrar_conversacion(
+            "Gracias por contactarte con nosotros. Lamentablemente no podemos continuar si no aceptas nuestras políticas de tratamiento de datos.",
+            "SaludoHabeasData"
+        )
+
+    # Si la respuesta no es clara, volvemos a preguntar
+           return responder(
+                "¿Deseas continuar y aceptar nuestras políticas de tratamiento de información?",
+                session_attributes,
+                "SaludoHabeasData"
+            )
+        # -----------------------------
+        # FLUJO: ConsultarSedes
+        # -----------------------------
+        if intent_name == "ConsultaBedrock":
+         mensaje_usuario = event["inputTranscript"]  # O el campo donde recibes el mensaje
+         respuesta = obtener_respuesta_bedrock_desde_lex(event)
+         return responder(respuesta, session_attributes, intent_name, fulfillment_state="Fulfilled") 
+
+                # -----------------------------
+        # FLUJO: Consultar Actividades
+        # -----------------------------
+
+        if intent_name == "ConsultaGrupales":
+            try:
+                print("Entrando a ConsultaGrupales")
+                # Normaliza los slots
+                slots = {k.lower(): v for k, v in slots.items()}
+                ciudad_raw = slots.get("ciudad", {}).get("value", {}).get("interpretedValue", "")
+                sede_raw = slots.get("sede", {}).get("value", {}).get("interpretedValue", "")
+                clase_raw = slots.get("clase", {}).get("value", {}).get("interpretedValue", "")
+                fecha = slots.get("fecha", {}).get("value", {}).get("interpretedValue", "")
+                
+                ciudad_raw = ciudad_raw.split(",")[0].strip()
+                sede_raw = sede_raw.split(",")[0].strip()
+                clase_raw = clase_raw.split(",")[0].strip()
+                
+                        # Si ya hay ciudad pero NO hay sede, sugiere las sedes disponibles
+                if ciudad_raw and not sede_raw:
+                    sedes = consultar_sedes_por_ciudad_id(ciudad_raw)
+                    if sedes:
+                      return {
+                        "sessionState": {
+                            "dialogAction": {"type": "ElicitSlot", "slotToElicit": "sede"},
+                            "intent": intent,
+                            "sessionAttributes": session_attributes
+                        },
+                        "messages": [{
+                            "contentType": "PlainText",
+                            "content": f"Estas son las sedes disponibles en {ciudad_raw}: {', '.join(sedes)}. ¿Cuál deseas consultar?"
+                        }],
+                        "responseCard": {
+                            "title": "Sedes disponibles",
+                            "buttons": [{"text": s, "value": s} for s in sedes]
+                        }
+                    }
+                    else:
+                      return responder(
+                        f"No se encontraron sedes para la ciudad {ciudad_raw}.",
+                        session_attributes,
+                        intent_name,
+                        fulfillment_state="Fulfilled"
+                    )
+
+                print(f"Slots recibidos: ciudad={ciudad_raw}, sede={sede_raw}, clase={clase_raw}, fecha={fecha}")
+
+                # Valida que todos los slots estén presentes
+                if not all([ciudad_raw, sede_raw, clase_raw, fecha]):
+                 return responder(
+                    "Faltan datos para consultar las clases grupales. Por favor, asegúrate de indicar ciudad, sede, clase y fecha.",
+                    session_attributes,
+                    intent_name,
+                    fulfillment_state="Fulfilled"
                 )
 
-            # Aún no responde con claridad
-            return responder("¿Deseas continuar y aceptar nuestras políticas de tratamiento de información?", session_attributes, "SaludoHabeasData")
+                # Obtén los IDs
+                id_sede = obtener_id_sede(sede_raw)
+                id_clase = obtener_id_actividad(clase_raw)
+                if not id_sede or not id_clase:
+                 return responder(
+                    "No se encontró la sede o clase indicada. Por favor, revisa los nombres.",
+                    session_attributes,
+                    intent_name,
+                    fulfillment_state="Fulfilled"
+                )
 
+                # Consulta horarios
+                horarios = consultar_horarios_por_sede_clase_fecha(id_sede, id_clase, fecha)
+                if not horarios:
+                 return responder(
+                    f"No hay horarios disponibles para {clase_raw} en la sede {sede_raw} el {fecha}.",
+                    session_attributes,
+                    intent_name,
+                    fulfillment_state="Fulfilled"
+                )
+
+                horarios_str = "\n".join(
+                f"- {h['hora_inicio']} a {h['hora_fin']}" for h in horarios
+                )
+                mensaje = (
+                f"Horarios para {clase_raw.capitalize()} en la sede {sede_raw.capitalize()} el {fecha}:\n"
+                f"{horarios_str}"
+                )
+                return responder(mensaje, session_attributes, intent_name, fulfillment_state="Fulfilled")
+
+            except Exception as e:
+                print("❌ Error en ConsultaGrupales:", str(e))
+                return responder(
+                "Lo siento, ha ocurrido un error al consultar las actividades. Intenta nuevamente más tarde.",
+                session_attributes,
+                intent_name
+                )
         # -----------------------------
         # FLUJO: SALUDO + HÁBEAS DATA
         # -----------------------------
@@ -102,7 +229,15 @@ def lambda_handler(event, context):
                         },
                         "messages": [{
                             "contentType": "PlainText",
-                            "content": "¡Gracias por aceptar nuestras políticas! ¿Dime en qué te puedo ayudar?"
+                            "content": (
+                                "¡Gracias por aceptar nuestras políticas! ✅\n\n"
+                                "¿En qué te podemos ayudarte?\n\n"
+                                "Algunas sugerencias:\n"
+                                "• Consulta de información de tu plan\n"
+                                "• Preguntas frecuentes sobre Bodytech\n"
+                                "• Información sobre ventas y promociones\n"
+                                "• Consulta de referidos"
+                            )
                         }]
                     }
 
@@ -117,11 +252,20 @@ def lambda_handler(event, context):
             # Primer contacto con esta intención
             session_attributes["politicas_mostradas"] = "true"
             mensaje = (
-                "Bienvenid@ al Servicio al Cliente de MiEmpresa! "
+                "Bienvenid@ al Servicio al Cliente de Bodytech! "
                 "Al continuar con esta comunicación estás de acuerdo con nuestra política de manejo de datos: "
-                "https://miempresa/tratamiento-de-informacion\n\n¿Deseas continuar?"
+                "https://bodytech.com.co/tratamiento-de-informacion\n\n¿Deseas continuar?"
             )
             return responder(mensaje, session_attributes, intent_name)
+                # -----------------------------
+        # FLUJO: Despedida
+        # -----------------------------
+        if intent_name == "Despedida":
+            return cerrar_conversacion(
+                "Gracias por contactarte con nosotros. ¡Feliz día! 😊",
+                intent_name
+            )
+
 
         # -----------------------------
         # FLUJO: ConsultaInfoPlan
@@ -145,6 +289,8 @@ def lambda_handler(event, context):
                 # 2. Consultar plan
                 datos_plan, error_msg = consultar_plan(document_type_id, document_number)
                 datos_plan_str = convertir_fechas_a_str(datos_plan)
+
+                
                 if error_msg:
                     return responder(error_msg, session_attributes, intent_name)
                 resumen = resumen_planes_para_bedrock(datos_plan_str)
@@ -160,7 +306,7 @@ def lambda_handler(event, context):
                 mensaje_final = respuesta_bedrock(intent_name, datos_plan_str)
                 if not mensaje_final or not mensaje_final.strip():
                  mensaje_final = "No se encontró información de tu plan. ¿Puedo ayudarte con algo más?"
-                mensaje_final = "¡Prueba exitosa! Este es un mensaje personalizado desde Lambda."
+                #mensaje_final = "¡Prueba exitosa..!
                 session_attributes["esperando_respuesta_final"] = "true"
                 print("Mensaje final a enviar:", mensaje_final)
 
@@ -216,6 +362,14 @@ def lambda_handler(event, context):
         # -----------------------------
         # FLUJO: CongelarPlan
         # -----------------------------
+        if session_attributes.get("acepto_politicas") != "true" and intent_name == "CongelarPlan":
+            print("🔁 Redirigiendo a SaludoHabeasData porque aún no se aceptan políticas.")
+            return responder(
+                "Para poder ayudarte con la congelación de tu plan, primero debes aceptar nuestras políticas de manejo de datos. "
+                "¿Deseas continuar?",
+                session_attributes,
+                "SaludoHabeasData"
+            )
 
         if intent_name == "CongelarPlan":
             try:
@@ -294,494 +448,38 @@ def lambda_handler(event, context):
         return responder("Lo siento, ha ocurrido un error inesperado.", {}, "FallbackIntent")
 
 
-# --------------------- #
-# FUNCIONES AUXILIARES  #
-# --------------------- #
 
-########################
-# Consultar KB Bedrock #
-########################
-
-def consultar_kb_bedrock(prompt, kb_id):
-    print("🤖 Enviando prompt a Bedrock:")
-    print(prompt)
-
-    client = boto3.client("bedrock-agent-runtime")
-    response = client.retrieve_and_generate(
-        input={"text": prompt},
-        retrieveAndGenerateConfiguration={
-            "knowledgeBaseConfiguration": {
-                "knowledgeBaseId": kb_id,
-                "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0"
-            },
-            "type": "KNOWLEDGE_BASE"
-        }
-    )
-    print("✅ Respuesta recibida desde Bedrock")
-    return response["output"]["text"]
+    # ...otros intents...
 
 
-###
-# Respuesta Post Pregunta Adicional
-###
-
-def manejar_respuesta_post_pregunta_adicional(input_transcript, session_attributes):
-    negativas = ["no", "no gracias", "nada más", "estoy bien", "ninguna"]
-    afirmativas = ["sí", "si", "claro", "vale", "de acuerdo", "otra", "quiero saber"]
-
-    if any(p in input_transcript.lower() for p in negativas):
-        return cerrar_conversacion("Gracias por contactarte con nosotros. ¡Feliz día! 😊", "Despedida")
-
-    elif any(p in input_transcript.lower() for p in afirmativas):
-        return mostrar_sugerencias(session_attributes)
-
-    # Si no es claro, se asume que podría ser una intención, entonces se clasifica con Bedrock
-    try:
-        prompt = f"""
-Usuario dijo: \"{input_transcript}\"
-Clasifica este mensaje en una de estas intenciones:
-- FQABodytech
-- Venta
-- ConsultaInfoPlan
-
-Devuelve solo una palabra (el nombre de la intención). Si no aplica ninguna, responde: Desconocido
-"""
-        config = obtener_secret("main/LexAgenteVirtualSAC")
-        intencion_detectada = consultar_kb_bedrock(prompt, config["BEDROCK_KB_ID_FQABodytech"]).strip()
-
-        if intencion_detectada in ["FQABodytech", "Venta", "ConsultaInfoPlan", "CongelarPlan"]:
-            print(f"✅ Disparando intención detectada: {intencion_detectada}")
+        # -----------------------------
+        # FLUJO: ConsultarSedes
+        # -----------------------------
+    if intent_name == "ConsultarSedes":
+            respuesta = obtener_info_sedes()
             return {
-                "sessionState": {
-                    "dialogAction": {"type": "ElicitIntent"},
-                    "intent": {
-                        "name": intencion_detectada,
-                        "state": "InProgress",
-                        "slots": {}  # Puedes mantener los slots vacíos o conservar los existentes si aplica
-                    },
-                    "sessionAttributes": session_attributes
-                },
-                "messages": [
-                    {"contentType": "PlainText", "content": f"¡Perfecto! Vamos a ayudarte"}
-                ]
-            }
-
-
-    except Exception as e:
-        print("❌ Error al clasificar con Bedrock:", str(e))
-
-    return responder("Lo siento, no logré entenderte. ¿Sobre cuál tema necesitas ayuda? 🤔", session_attributes, "FallbackIntent")
-
-
-###
-# Obtener Token
-###
-
-def obtener_token_dinamico(config):
-    print("🔐 Solicitando token OAuth dinámico...")
-
-    token_url = config.get("TOKEN_URL")
-    client_id = config.get("CLIENT_ID")
-    client_secret = config.get("CLIENT_SECRET")
-
-    if not all([token_url, client_id, client_secret]):
-        print("❌ Configuración incompleta para obtener token")
-        raise Exception("Faltan datos para autenticación")
-
-    token_payload = {
-        "grant_type": "client_credentials",
-        "client_id": client_id,
-        "client_secret": client_secret
-    }
-    token_headers = {"Content-Type": "application/json"}
-
-    token_response = requests.post(token_url, json=token_payload, headers=token_headers)
-
-    if token_response.status_code != 200:
-        print("❌ Error obteniendo token:", token_response.status_code, token_response.text)
-        raise Exception("Error obteniendo token")
-
-    token_data = token_response.json()
-    access_token = token_data.get("access_token")
-
-    if not access_token:
-        raise Exception("Token de acceso no recibido")
-
-    print("✅ Token obtenido correctamente")
-    return access_token
-
-###
-# Consulta Tipo y Numero de Documeto  
-###
-
-def validar_documento_usuario(slots, session_attributes, input_transcript, intent):
-    print("🔍 Validando tipo y número de documento...")
-
-    tipo_documento_map = {
-        "ke": 2, "carnet de extranjería": 2,
-        "sc": 5, "salvoconducto de permanencia": 5,
-        "nit": 9, "número de identificación tributaria": 9,
-        "cc": 10, "cedula": 10, "cédula ciudadanía": 10,
-        "dni": 11, "documento nacional de identidad": 11,
-        "ruc": 12, "registro único de contribuyentes": 12,
-        "ce": 20, "cedula extranjera": 20, "extranjería": 20,
-        "pp": 30, "pasaporte": 30,
-        "ti": 50, "tarjeta de identidad": 50
-    }
-
-    # ✅ Caso 1: Ya está en sesión
-    if "document_type_id" in session_attributes and "document_number_val" in session_attributes:
-        print("✅ Tipo y número de documento ya existen en session_attributes")
-        return int(session_attributes["document_type_id"]), session_attributes["document_number_val"], session_attributes, None
-
-    # ✅ Caso 2: Buscar en slots
-    document_type_raw = slots.get("document_type", {}).get("value", {}).get("interpretedValue", "") if slots else ""
-    document_number = slots.get("document_number", {}).get("value", {}).get("interpretedValue", "") if slots else ""
-
-    # ✅ Caso 3: Input directo
-    if not document_number and input_transcript and input_transcript.replace(" ", "").isalnum():
-        print("ℹ️ Intentando capturar número desde input directo")
-        document_number = input_transcript.strip()
-
-    print("📌 Document Type recibido:", document_type_raw)
-    print("📌 Document Number recibido:", document_number)
-
-    # Buscar coincidencia parcial entre las posibles interpretaciones
-    document_type_id = None
-    if document_type_raw:
-        for parte in document_type_raw.lower().split(","):
-            parte = parte.strip()
-            if parte in tipo_documento_map:
-                document_type_id = tipo_documento_map[parte]
-                break
-
-    # ⚠️ Validación de datos
-    if not document_type_id or not document_number or len(document_number) < 5:
-        print("⚠️ Datos incompletos o inválidos")
-        slot_faltante = "document_number" if document_type_id else "document_type"
-        respuesta = {
             "sessionState": {
-                "dialogAction": {"type": "ElicitSlot", "slotToElicit": slot_faltante},
+                "dialogAction": {"type": "ElicitIntent"},
                 "intent": {
-                    "name": intent.get("name"),
-                    "slots": intent.get("slots", {}),
-                    "state": "InProgress",
-                    "confirmationState": "None"
+                    "name": intent_name,
+                    "state": "Fulfilled"
                 },
-                "sessionAttributes": session_attributes
+                "sessionAttributes": event.get("sessionAttributes", {})
             },
             "messages": [
                 {
                     "contentType": "PlainText",
-                    "content": "Por favor, proporciona un tipo y número de documento válido."
+                    "content": respuesta
                 }
             ]
         }
-        return None, None, session_attributes, respuesta
-
-    # ✅ Guardar en sesión
-    session_attributes["document_type_id"] = str(document_type_id)
-    session_attributes["document_number_val"] = document_number
-    print(f"✅ Tipo documento mapeado: {document_type_id}, Número: {document_number}")
-
-    return document_type_id, document_number, session_attributes, None
-
-
-
-###############################
-# Consulta Plan               # 
-###############################
-
-def consultar_plan(document_type, document_number):
-    print("📞 Iniciando consulta de plan...")
-
-    try:
-        datos = consultar_planes_redshift(document_type, document_number)
-        print("🔎 Datos recibidos de Redshift:", datos)
-
-        # Validación reforzada
-        if not datos or not isinstance(datos, list) or len(datos) == 0:
-            return None, "No encontramos información del plan asociada a ese documento. Verifica los datos o intenta más tarde."
         
-        # Se extrae nombre y appelido del primer plan si existen
-        primer_plan = datos[0] if datos else {}
-        nombre = primer_plan.get("full_name", "").split()
-        name = nombre[0] if nombre else ""
-        last_name = " ".join(nombre[1:]) if len(nombre) > 1 else ""
-
-        datos = {
-            "data": {
-                "name": name,
-                "last_name": last_name,
-                "plans": datos
-            }
-        }
-
-        return datos, None
-    except Exception as e:
-        print("❌ Error al consultar el plan en Redshift:", str(e))
-        return None, "Lo siento, hubo un problema consultando el plan. Intenta más tarde."
-
-###############################
-# Consulta Plan es Recurrente # 
-###############################
-
-def obtener_is_recurring_desde_json(session_attributes):
-    try:
-        datos_json = session_attributes.get("datos_plan_json") or session_attributes.get("info_plan")
-        if not datos_json:
-            return None
-        
-        parsed = json.loads(datos_json)
-        plans = parsed.get("data", {}).get("plans", [])
-        if not plans:
-            return None
-        
-        return plans[0].get("is_recurring", None)
-    except Exception as e:
-        print("❌ Error al extraer is_recurring:", str(e))
-        return None
-
-##################################
-# Resumen Informacion Plan       # 
-##################################
-
-def obtener_resumen_plan(datos_plan: dict) -> str:
-    """
-    Resume los datos del plan en texto plano para usar en el prompt de Bedrock.
-    Evita que se envie el JSON completo y mejora rendimiento.
-    """
-    try:
-        data = datos_plan.get("data", {})
-        nombre = f"{data.get('name', '')} {data.get('last_name', '')}".strip()
-        plan = data.get("plans", [])[0] if data.get("plans") else {}
-
-        # Ajusta los campos según tu estructura real
-        resumen = (
-            f"Nombre: {nombre}\n"
-            f"Tipo de plan: {plan.get('product_name', 'N/A')}\n"
-            f"Estado: {'Activo ✅' if plan.get('line_status', 0) == 1 else 'Inactivo'}\n"
-            f"Inicio: {plan.get('date_start', 'N/A')}\n"
-            f"Vencimiento: {plan.get('date_end', 'N/A')}\n"
-            f"Sede: {plan.get('venue_use', 'N/A')}\n"
-            f"Recurrente: {'Sí' if plan.get('is_recurring') else 'No'}"
-        )
-        return resumen
-    except Exception as e:
-        print("❌ Error generando resumen:", str(e))
-        return "Información no disponible"
-
-
-#####################################
-# Consulta Bedrock Lenguaje Natural # 
-#####################################
-
-def respuesta_bedrock(intent_name: str, contenido_json: dict, modelo: str = "anthropic.claude-3-sonnet-20240229-v1:0") -> str:
-    """
-    Genera una respuesta en lenguaje natural usando Bedrock sin KB,
-    a partir del resumen del JSON de entrada y un prompt personalizado por intención.
-    """
-    import boto3
-    import json
-
-    client = boto3.client("bedrock-runtime")
-
-    # ✅ 1. Generar resumen y construir prompt
-    resumen = obtener_resumen_plan(contenido_json)
-    prompt = get_prompt_por_intent(intent_name, resumen)
-
-    print("🧠 Prompt enviado a Bedrock:")
-    print(prompt)
-
-    # ✅ 2. Enviar al modelo
-    response = client.invoke_model(
-        body=json.dumps({
-            "prompt": prompt,
-            "max_tokens_to_sample": 500,
-            "temperature": 0.7
-        }),
-        modelId=modelo,
-        accept="application/json",
-        contentType="application/json"
-    )
-
-    # ✅ 3. Leer respuesta
-    respuesta = json.loads(response["body"].read().decode())
-    return respuesta.get("completion", "").strip()
-
-
-####
-# Respuestas Congelacion
-###
-
-
-def obtener_respuesta_congelacion(is_recurring):
-    if is_recurring:
-        return (
-            "👋 ¡Hola! Congelar tu plan es muy fácil. Te cuento: "
-            "🧊 ¿Cómo lo haces? "
-            "• Ingresa a 👉 https://www.bodytech.com.co "
-            "• Ve a tu perfil y entra en la sección 'Novedades'. "
-            "📆 ¿Cada cuánto puedo congelar? "
-            "• Puedes congelar tu plan las veces que quieras. "
-            "• Cada congelación debe ser de mínimo 7 días y máximo 30 días. "
-            "💵 ¿Tiene costo? "
-            "• Solo pagas una cuota de mantenimiento. "
-            "• Es el 25% del valor del tiempo congelado. "
-            "• Cubre sede y equipos 🏋️. "
-            "⚠️ Importante: la congelación solo aplica hacia el futuro, no se puede hacer retroactiva."
-        )
-    else:
-        return (
-            "👋 ¡Hola! Congelar tu plan es muy fácil. Te cuento: "
-            "🧊 ¿Cómo lo haces? "
-            "• Ingresa a 👉 https://www.bodytech.com.co "
-            "• Ve a tu perfil y entra en la sección 'Novedades'. "
-            "📆 ¿Cada cuánto puedo congelar? "
-            "• Puedes congelar tu plan 2 veces al año. "
-            "• Cada congelación debe ser de mínimo 7 días y máximo 30 días. "
-            "⚠️ Importante: la congelación solo aplica hacia el futuro, no se puede hacer retroactiva."
-        )
-
-
-    return contenido
 
 
 
 
-# -----------------------------
-# PROMPT (mantener igual)
-# -----------------------------
-
-def get_prompt_por_intent(intent_name, contenido):
- 
-##### 
-## Informacion de Plan
-#####
-
-    if intent_name == "ConsultaInfoPlan":
-        return f"""
-Eres un asistente virtual de servicio al cliente de Bodytech. Tu objetivo es brindar información del plan de forma clara, cálida y profesional.
-
-🧩 ¿Qué debes hacer?
-
-1. Lee el JSON que contiene los datos del plan.
-2. Si no hay plan activo, responde con un mensaje cordial informando eso.
-3. Si hay plan, incluye:
-   - Saludo personalizado si hay nombre
-   - Tipo de plan
-   - Fecha de inicio y fin
-   - Estado
-   - Extras como sede, modalidad, etc. si están presentes
-
-📌 Formato de respuesta:
-• Usa viñetas con bullet (•)
-• Añade emojis moderados (💪, ✅, 🏋️, 😊)
-• Sé directo, empático, evita repetir preguntas
-
-🎯 Finaliza SIEMPRE con:
-“¿Puedo ayudarte con algo más? 🤗”
-
-Ejemplo de estructura:
-
-🏋️ ¡Hola Lucelly! Es un placer asistirte.
-
-Tu plan actual:
-
-• Tipo: Familiar Pro  
-• Estado: Activo ✅  
-• Inicio: 01/01/2024  
-• Vencimiento: 31/12/2024  
-• Modalidad: Presencial  
-
-¿Puedo ayudarte con algo más? 🤗
-
----  
-Contenido del plan en JSON:
-
-\"\"\"  
-{contenido}  
-\"\"\"
-"""
-    
-##############################
-## Preguntas Frecuentes BT
-##############################
 
 
-    if intent_name == "FQABodytech":
-        return f"""
-Eres un asistente profesional de servicio al cliente de Bodytech. Responde de manera clara, estructurada, amable y confiable.
 
-➡️ Estructura tu respuesta en secciones con títulos claros como: Concepto, Características, Fundación, Filosofía, etc.
-✅ Usa viñetas (•), emojis moderados y respuestas cortas.
-❌ No repitas la pregunta del usuario ni expliques cómo se obtuvo la respuesta.
-
-Ejemplo esperado:
-
-🏋️ Bodytech es un Centro Médico Deportivo que:
-
-Concepto:
-•⁠ Gimnasio especializado en salud
-•⁠ Más que un centro de entrenamiento tradicional
-•⁠ Enfoque personalizado en ejercicio físico
-
-Características:
-•⁠ Prescripción de ejercicios individual
-•⁠ Prevención de lesiones
-•⁠ Mejora de la calidad de vida
-•⁠ Acompañamiento profesional
-
-Filosofía: "El ejercicio es el motor de una vida sana" 💪
-
-{contenido}
-
-¿Puedo ayudarte en algo más? 🤗
-"""
-
-    if intent_name == "Venta":
-        return f"""
-El usuario está interesado en comprar un plan. Si puedes dar una respuesta informativa clara con base en esta información hazlo. 
-Si no hay información suficiente, responde de forma amigable:
-
-🛍️ ¡Gracias por tu interés!
-Un asesor de nuestro equipo estará contigo en breve para ayudarte con tu compra 😊
-
-Luego, finaliza con esta frase:
-
-🤖 Paso a agente activado: campaign_id=VENTAS
-
-{contenido}
-"""
-    
-###################################
-## Preguntas Frecuentes Referido ##
-###################################
-
-    if intent_name == "FQAReferidos":
-        return f"""
-Eres un asistente profesional de servicio al cliente de Bodytech. Responde de forma clara, amable y confiable a cualquier consulta relacionada con los beneficios, condiciones o funcionamiento del Plan de Referidos
-
-➕ Tu objetivo es ayudar al usuario a entender fácilmente cómo funciona el plan, sus restricciones y beneficios, de forma corta y clara.
-
-➡️ Estructura tu respuesta en secciones con títulos breves y destacados (por ejemplo: Cómo funciona, Quién puede participar, Beneficios, Restricciones).
-➡️ Sé claro, directo y amable
-➡️ Usa frases cortas y fácil lectura en móvil
-➡️ Mantén la respuesta breve 
-➡️ Agrupa la información por secciones, si es posible
-✅ Usa viñetas (•), frases cortas y emojis moderados para facilitar la lectura.
-➡️ Mantén la respuesta breve (máx. 6–8 líneas de texto)
-
-❌ No repitas la pregunta del usuario
-❌ No expliques cómo obtuviste la respuesta
-❌ No agregues condiciones que no estén en la fuente oficial
-agrega al final ¿Puedo ayudarte en algo más? 🤗
-
-{contenido}
-"""
-
-####################
-# Resumen de planes #
-####################
 
 
