@@ -62,14 +62,7 @@ def lambda_handler(event, context):
         print(f"  - Tiene document_number: {session_attributes.get('document_number')}")
         print(f"  - Slots actuales: {slots}")
 
-        # PRIORIDAD 0: Manejar respuesta sobre hablar con asesor
-        if session_attributes.get("esperando_respuesta_asesor") == "true":
-            from utils import procesar_respuesta_asesor
-            respuesta_asesor = procesar_respuesta_asesor(input_transcript, session_attributes)
-            if respuesta_asesor:
-                return respuesta_asesor
-
-        # Detectar sesión nueva con intent incorrecto
+        # ✅ CRÍTICO: Detectar sesión nueva con intent incorrecto
         es_sesion_nueva = not session_attributes or len(session_attributes) == 0
         politicas_no_aceptadas = session_attributes.get("acepto_politicas") != "true"
         
@@ -125,6 +118,14 @@ def lambda_handler(event, context):
             "ConsultarInvitados", "FQAReferidos", "ConsultaIncapacidades", 
             "ConsultaInfoPlan", "CongelarPlan", "Ingresos", "SaludoHabeasData", "ConsultaHorarios"
         ]
+        
+        # PRIORIDAD 0: Manejar respuesta sobre hablar con asesor
+        if session_attributes.get("esperando_respuesta_asesor") == "true":
+            from utils import procesar_respuesta_asesor
+            respuesta_asesor = procesar_respuesta_asesor(input_transcript, session_attributes)
+            if respuesta_asesor:
+                return respuesta_asesor
+        
         # PRIORIDAD 1: Manejar CALIFICACIÓN PRIMERO
         if session_attributes.get("esperando_calificacion") == "true":
             session_attributes.pop("esperando_calificacion", None)
@@ -147,90 +148,51 @@ def lambda_handler(event, context):
                     
                     # 🆕 SI DEBE IR A ASESOR, MENSAJE DIFERENTE
                     if ir_a_asesor_despues:
-                        # Mensaje personalizado según la calificación para asesor
-                        if calificacion == 5:
-                            mensaje_agradecimiento = f"¡Excelente! {estrellas}\n\n¡Nos alegra saber que tuviste una experiencia fantástica! 😊"
-                        elif calificacion == 4:
-                            mensaje_agradecimiento = f"¡Muy buena! {estrellas}\n\n¡Gracias por tu valoración positiva! 😊"
-                        elif calificacion == 3:
-                            mensaje_agradecimiento = f"Regular {estrellas}\n\n¡Gracias por tu calificación! Trabajaremos para mejorar. 😊"
-                        elif calificacion == 2:
-                            mensaje_agradecimiento = f"Mala {estrellas}\n\n¡Gracias por tu honestidad! Nos ayuda a mejorar nuestro servicio. 😊"
-                        else:  # calificacion == 1
-                            mensaje_agradecimiento = f"Muy mala {estrellas}\n\n¡Gracias por tu feedback! Tomaremos medidas para mejorar. 😊"
-                        
-                        # 🆕 REDIRIGIR A VENTA (ASESOR) EN LUGAR DE CERRAR
-                        # Limpiar session para Venta
-                        keys_to_remove = [
-                            "en_flujo_activo", "clase_display", "slots_previos",
-                            "esperando_transicion_grupales", "esperando_transicion_sedes",
-                            "esperando_info_invitados", "esperando_info_incapacidad", 
-                            "esperando_info_referidos", "esperando_seleccion_menu"
-                        ]
-                        for key in keys_to_remove:
-                            session_attributes.pop(key, None)
-                        
-                        session_attributes["en_flujo_activo"] = "Venta"
-                        
                         return {
                             "sessionState": {
-                                "dialogAction": {"type": "ElicitIntent"},
-                                "intent": {
-                                    "name": "Venta",
-                                    "slots": {},
-                                    "state": "InProgress"
-                                },
-                                "sessionAttributes": session_attributes
+                                "dialogAction": {"type": "Close"},
+                                "intent": {"name": "TransferenciaAsesor", "state": "Fulfilled"},
+                                "sessionAttributes": {"conversacion_finalizada": "true"}
                             },
                             "messages": [{
                                 "contentType": "PlainText",
                                 "content": (
-                                    f"{mensaje_agradecimiento}\n\n"
-                                    "👨‍💼 **Ahora te conectaré con uno de nuestros asesores especializados.**\n\n"
-                                    "📞 En un momento uno de nuestros asesores se pondrá en contacto contigo para brindarte "
-                                    "la ayuda personalizada que necesitas.\n\n"
-                                    "🕐 **Tiempo estimado de espera:** 2-5 minutos\n\n"
-                                    "¡Gracias por tu paciencia!"
+                                    f"¡Gracias por tu calificación! {estrellas}\n\n"
+                                    "Te estamos transfiriendo con uno de nuestros asesores especializados.\n\n"
+                                    "En un momento estarás conectado para recibir ayuda personalizada. 👨‍💼"
                                 )
                             }]
                         }
                     
-                    # 🔄 FLUJO NORMAL DE CALIFICACIÓN (cuando NO va a asesor)
-                    else:
-                        # Mensaje personalizado según la calificación (flujo normal)
-                        if calificacion == 5:
-                            mensaje_agradecimiento = f"¡Excelente! {estrellas}\n\n¡Nos alegra saber que tuviste una experiencia fantástica! 😊"
-                        elif calificacion == 4:
-                            mensaje_agradecimiento = f"¡Muy buena! {estrellas}\n\n¡Gracias por tu valoración positiva! 😊"
-                        elif calificacion == 3:
-                            mensaje_agradecimiento = f"Regular {estrellas}\n\n¡Gracias por tu calificación! Trabajaremos para mejorar. 😊"
-                        elif calificacion == 2:
-                            mensaje_agradecimiento = f"Mala {estrellas}\n\n¡Gracias por tu honestidad! Nos ayuda a mejorar nuestro servicio. 😊"
-                        else:  # calificacion == 1
-                            mensaje_agradecimiento = f"Muy mala {estrellas}\n\n¡Gracias por tu feedback! Tomaremos medidas para mejorar. 😊"
-                        
-                        session_attributes["conversacion_finalizada"] = "true"
-                        return {
-                            "sessionState": {
-                                "dialogAction": {"type": "Close"},
-                                "intent": {
-                                    "name": intent_name if intent_name else "CalificacionServicio",
-                                    "state": "Fulfilled"
-                                },
-                                "sessionAttributes": session_attributes
+                    # Mensaje personalizado según la calificación (lógica normal)
+                    if calificacion == 5:
+                        mensaje_agradecimiento = f"¡Excelente! {estrellas}\n\n¡Nos alegra saber que tuviste una experiencia fantástica! 😊"
+                    elif calificacion == 4:
+                        mensaje_agradecimiento = f"¡Muy buena! {estrellas}\n\n¡Gracias por tu valoración positiva! 😊"
+                    elif calificacion == 3:
+                        mensaje_agradecimiento = f"Regular {estrellas}\n\n¡Gracias por tu calificación! Trabajaremos para mejorar. 😊"
+                    elif calificacion == 2:
+                        mensaje_agradecimiento = f"Mala {estrellas}\n\n¡Gracias por tu honestidad! Nos ayuda a mejorar nuestro servicio. 😊"
+                    else:  # calificacion == 1
+                        mensaje_agradecimiento = f"Muy mala {estrellas}\n\n¡Gracias por tu feedback! Tomaremos medidas para mejorar. 😊"
+                    session_attributes["conversacion_finalizada"] = "true"
+                    return {
+                        "sessionState": {
+                            "dialogAction": {"type": "Close"},
+                            "intent": {
+                                "name": intent_name if intent_name else "CalificacionServicio",
+                                "state": "Fulfilled"
                             },
-                            "messages": [{
-                                "contentType": "PlainText",
-                                "content": f"{mensaje_agradecimiento}\n\n¡Que tengas un excelente día! 🌟"
-                            }]
-                        }
+                            "sessionAttributes": session_attributes
+                        },
+                        "messages": [{
+                            "contentType": "PlainText",
+                            "content": f"{mensaje_agradecimiento}\n\n¡Que tengas un excelente día! 🌟"
+                        }]
+                    }
                 else:
                     # Número fuera del rango 1-5
                     session_attributes["esperando_calificacion"] = "true"
-                    # 🆕 RESTAURAR BANDERA DE ASESOR SI EXISTE
-                    if ir_a_asesor_despues:
-                        session_attributes["despues_calificacion_asesor"] = "true"
-                    
                     return {
                         "sessionState": {
                             "dialogAction": {"type": "ElicitIntent"},
@@ -254,10 +216,6 @@ def lambda_handler(event, context):
             except ValueError:
                 # No es un número válido (respuesta ambigua)
                 session_attributes["esperando_calificacion"] = "true"
-                # 🆕 RESTAURAR BANDERA DE ASESOR SI EXISTE
-                if ir_a_asesor_despues:
-                    session_attributes["despues_calificacion_asesor"] = "true"
-                
                 return {
                     "sessionState": {
                         "dialogAction": {"type": "ElicitIntent"},
@@ -324,6 +282,10 @@ def lambda_handler(event, context):
             
             try:
                 print(f"🔍 Analizando input para detección automática de grupales: '{input_transcript}'")
+                
+                # 🆕 VERIFICACIÓN ESPECIAL PARA CENTRO MAYOR
+                if "centro mayor" in input_transcript.lower():
+                    print("🎯 DETECCIÓN AUTOMÁTICA: 'centro mayor' encontrado - procesando como ConsultaGrupales")
                 
                 # Usar la función existente para extraer parámetros
                 resultado_grupales = extraer_y_validar_slots_grupales(input_transcript, session_attributes, {
@@ -451,8 +413,9 @@ def lambda_handler(event, context):
                                         "Selecciona una opción:\n"
                                         "1️⃣ Otra ciudad\n"
                                         "2️⃣ Otra sede\n"
+                                        "3️⃣ No gracias\n\n"
                                         "🏠 M Menú principal\n"
-                                        "💬 Recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
+                                        "💬 Escribe el nombre de la sede, recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
                                     )
                                 }]
                             }
@@ -1040,7 +1003,7 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                         },
                         "messages": [{
                             "contentType": "PlainText",
-                            "content": f"{respuesta_rapida} Continuemos con tu consulta de sedes.\n\n¿Deseas hacer otra consulta de sedes? 🏢\n\nSelecciona una opción:\n1️⃣ Otra ciudad\n2️⃣ Otra sede\n3️⃣ No gracias\n\n🏠 M Menú principal\n💬 Recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
+                            "content": f"{respuesta_rapida} Continuemos con tu consulta de sedes.\n\n¿Deseas hacer otra consulta de sedes? 🏢\n\nSelecciona una opción:\n1️⃣ Otra ciudad\n2️⃣ Otra sede\n3️⃣ No gracias\n\n🏠 M Menú principal\n💬 Escribe el nombre de la sede, recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
                         }]
                     }
                 
@@ -1685,6 +1648,7 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                 # ✅ RESETEAR CONTADOR AL INICIAR FLUJO EXITOSO
                 from utils import resetear_contador_no_reconocidas
                 resetear_contador_no_reconocidas(session_attributes)
+                
                 # USAR INPUT ORIGINAL DEL MENÚ SI EXISTE
                 input_para_procesar = input_transcript
 
@@ -3384,19 +3348,13 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
         # FLUJO: ConsultarSedes
         # -----------------------------
         if intent_name == "ConsultarSedes":
-            session_attributes["en_flujo_activo"] = intent_name
-            
             # ✅ RESETEAR CONTADOR AL INICIAR FLUJO EXITOSO
             from utils import resetear_contador_no_reconocidas
             resetear_contador_no_reconocidas(session_attributes)
             
-            # VERIFICAR SI EL FLUJO YA TERMINÓ
-            if session_attributes.get("flujo_terminado") == "true":
-                print("🔍 Flujo ya terminado, no procesar validaciones adicionales")
-                session_attributes.pop("flujo_terminado", None)
-                return mostrar_menu_principal(session_attributes)
-    
-            # VERIFICAR SI VIENE DEL PROCESAMIENTO AUTOMÁTICO
+            session_attributes["en_flujo_activo"] = intent_name
+            
+            # 🆕 VERIFICAR SI VIENE DEL PROCESAMIENTO AUTOMÁTICO
             if session_attributes.get("procesamiento_automatico_sedes") == "true":
                 print("🎯 Procesamiento automático activado - usando datos extraídos")
                 
@@ -3513,9 +3471,9 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                                 "Selecciona una opción:\n"
                                 "1️⃣ Otra ciudad\n"
                                 "2️⃣ Otra sede\n"
-                                "\n"
+                                "3️⃣ No gracias\n\n"
                                 "🏠 M Menú principal\n"
-                                "💬 Recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
+                                "💬 Escribe el nombre de la sede, recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
                             )
                         }]
                     }
@@ -3666,8 +3624,9 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                                     "Selecciona una opción:\n"
                                     "1️⃣ Otra ciudad\n"
                                     "2️⃣ Otra sede\n"
+                                    "3️⃣ No gracias\n\n"
                                     "🏠 M Menú principal\n"
-                                    "💬 Recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
+                                    "💬 Escribe el nombre de la sede, recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
                                 )
                             }]
                         }
@@ -3705,8 +3664,9 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                                     "Selecciona una opción:\n"
                                     "1️⃣ Otra ciudad\n"
                                     "2️⃣ Otra sede\n"
+                                    "3️⃣ No gracias\n\n"
                                     "🏠 M Menú principal\n"
-                                    "💬 Recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
+                                    "💬 Escribe el nombre de la sede, recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
                                 )
                             }]
                         }
@@ -3852,6 +3812,8 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                     tipo_transicion = "otra_ciudad"
                 elif input_lower == "2":
                     tipo_transicion = "otra_sede"
+                elif input_lower == "3":
+                    tipo_transicion = "no"
                 else:
                     contenido = (
                         "🤔 No entendí tu respuesta. Por favor, selecciona una opción válida:\n\n"
@@ -4246,8 +4208,9 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                                 "Selecciona una opción:\n"
                                 "1️⃣ Otra ciudad\n"
                                 "2️⃣ Otra sede\n"
+                                "3️⃣ No gracias\n\n"
                                 "🏠 M Menú principal\n"
-                                "💬 Recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
+                                "💬 Escribe el nombre de la sede, recuerda que puedes elegir M para volver al menú principal, selecciona una opción."
                             )
                         }]
                     }
@@ -4338,10 +4301,6 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                     session_attributes["acepto_politicas"] = "true"
                     session_attributes.pop("politicas_mostradas", None)
                     
-                    # ✅ RESETEAR CONTADOR AL ACEPTAR POLÍTICAS
-                    from utils import resetear_contador_no_reconocidas
-                    resetear_contador_no_reconocidas(session_attributes)
-                    
                     # 🆕 MOSTRAR MENÚ PRINCIPAL AUTOMÁTICAMENTE
                     print("✅ Políticas aceptadas - Mostrando menú principal")
                     return mostrar_menu_principal(session_attributes)
@@ -4422,10 +4381,6 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
         # -----------------------------
 
         if intent_name == "ConsultaInfoPlan":
-            # ✅ RESETEAR CONTADOR AL INICIAR FLUJO EXITOSO
-            from utils import resetear_contador_no_reconocidas
-            resetear_contador_no_reconocidas(session_attributes)
-            
             session_attributes.pop("esperando_respuesta_final", None)
             try:
                 session_attributes["en_flujo_activo"] = intent_name
@@ -4513,11 +4468,11 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
         # 4️⃣ FLUJO: FQABodytech
         # -----------------------------
         if intent_name == "FQABodytech":
-            # ✅ RESETEAR CONTADOR AL INICIAR FLUJO EXITOSO
-            from utils import resetear_contador_no_reconocidas
-            resetear_contador_no_reconocidas(session_attributes)
-            
             try:
+                # ✅ RESETEAR CONTADOR AL INICIAR FLUJO EXITOSO
+                from utils import resetear_contador_no_reconocidas
+                resetear_contador_no_reconocidas(session_attributes)
+                
                 session_attributes["en_flujo_activo"] = intent_name
                 config = obtener_secret("main/LexAgenteVirtualSAC")
                 prompt = get_prompt_por_intent(intent_name, input_transcript)
@@ -4535,25 +4490,12 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
         # FLUJO: Venta
         # -----------------------------
         if intent_name == "Venta":
-            # ✅ RESETEAR CONTADOR AL INICIAR FLUJO EXITOSO
-            from utils import resetear_contador_no_reconocidas
-            resetear_contador_no_reconocidas(session_attributes)
-            
             try:
                 session_attributes["en_flujo_activo"] = intent_name
                 config = obtener_secret("main/LexAgenteVirtualSAC")
-                
-                # ✅ OBTENER INPUT ORIGINAL DEL MENÚ SI EXISTE
-                input_para_procesar = input_transcript
-                if session_attributes.get("input_original_menu"):
-                    input_para_procesar = session_attributes.get("input_original_menu")
-                    print(f"🔍 VENTA: Usando input original del menú: '{input_para_procesar}'")
-                    session_attributes.pop("input_original_menu", None)
-                
-                prompt = get_prompt_por_intent(intent_name, input_para_procesar)
+                prompt = get_prompt_por_intent(intent_name, input_transcript)
                 kb_id = config.get("BEDROCK_KB_ID_Venta")
                 print(f"🔍 KB ID obtenido: {kb_id}")
-                
                 if kb_id:
                     print("🔍 Procesando con KB...")
                     respuesta_kb = consultar_kb_bedrock(prompt, kb_id)
@@ -4562,9 +4504,8 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                 else:
                     print("🔍 Procesando sin KB (mensaje estático)...")
                     campaign_id = config.get("campain_ventas", "1")
-                    mensaje_final = f"🛍️ ¡Gracias por tu interés!\nUn asesor de nuestro equipo estará contigo en breve para ayudarte con tu compra 😊\n\n🤖 Paso a agente activado: campaign_id=VENTAS"
+                    mensaje_final = f"🛍️ ¡Gracias por tu interés!\nUn asesor de nuestro equipo estará contigo en breve para ayudarte con tu compra 😊"
                     print(f"🔍 Campaign ID: {campaign_id}")
-                
                 session_attributes.pop("en_flujo_activo", None)
                 session_attributes["esperando_respuesta_final"] = "true"
                 print(f"🔍 esperando_respuesta_final marcado: {session_attributes.get('esperando_respuesta_final')}")
@@ -4692,7 +4633,12 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
         # FLUJO: Fallback personalizado
         # -----------------------------
         if intent_name == "FallbackIntent":
-            from utils import incrementar_contador_no_reconocidas, debe_ofrecer_asesor, ofrecer_hablar_con_asesor
+            from utils import incrementar_contador_no_reconocidas, debe_ofrecer_asesor, ofrecer_hablar_con_asesor, es_input_valido
+            
+            # Verificar si el input es válido antes de incrementar contador
+            if not es_input_valido(input_transcript):
+                print(f"🚫 Input inválido detectado en FallbackIntent: '{input_transcript}'")
+                return mostrar_menu_principal(session_attributes)
             
             contador = incrementar_contador_no_reconocidas(session_attributes)
             
@@ -5068,6 +5014,7 @@ Si NO es clara, es confusa, o es texto sin sentido, responde: "No encontramos es
                     }
                     session_attributes["sede_id"] = str(resultado["sede_id"])
                     session_attributes["sede_nombre"] = resultado["sede_nombre"]
+
 
                 if resultado["clase_id"]:
                     slots_nuevos["clase"] = {
