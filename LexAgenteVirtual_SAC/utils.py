@@ -1158,8 +1158,9 @@ def esperando_respuesta_sedes(session_attributes, input_transcript, slots, inten
         return _procesar_otra_ciudad_sedes(session_attributes)
     elif "otra sede" in input_lower or input_lower == "2":
         print("✅ Transición detectada: OTRA SEDE") 
-        return _procesar_otra_sede_sedes(session_attributes, slots, intent)
-    elif any(p in input_lower for p in ["no", "nada", "gracias", "eso es todo", "ninguna", "no gracias", "nada mas"]):
+        return _procesar_otra_sede_sedes(session_attributes, slots, intent)  # ✅ CAMBIO AQUÍ
+    elif (input_lower in ["no", "no gracias", "3"] or 
+          any(p in input_lower for p in ["no", "nada", "gracias", "eso es todo", "ninguna", "no gracias", "nada mas"])):
         print("✅ Transición detectada: NO MÁS CONSULTAS")
         return _procesar_no_mas_consultas_sedes(session_attributes)
     
@@ -1268,7 +1269,7 @@ def _procesar_otra_sede_sedes(session_attributes, slots, intent):
         },
         "messages": [{
             "contentType": "PlainText",
-            "content": f"¡Perfecto! Te ayudo a consultar otra sede en {ciudad_actual}. ¿En qué sede deseas consultar ahora? 🏢"
+            "content": f"¡Perfecto! Te ayudo a consultar otra sede en {ciudad_actual}. ¿En qué ciudad deseas consultar ahora? 🏢"
         }]
     }
 
@@ -1279,16 +1280,10 @@ def _procesar_no_mas_consultas_sedes(session_attributes):
     # Limpiar todo y enviar pregunta final
     keys_to_remove = [
         "en_flujo_activo", "ciudad", "ciudad_id", "ciudad_nombre", 
-        "pregunta_categoria", "consultando_horarios", "esperando_transicion_sedes",
-        "sede_id", "sede_nombre", "tipo_consulta_temporal", 
-        "input_original_menu", "procesar_con_datos_extraidos",
-        "deteccion_automatica_completada"
+        "pregunta_categoria", "consultando_horarios", "esperando_transicion_sedes"
     ]
     for key in keys_to_remove:
         session_attributes.pop(key, None)
-    
-    # MARCAR EXPLÍCITAMENTE QUE NO DEBE CONTINUAR FLUJO
-    session_attributes["flujo_terminado"] = "true"
     
     return responder_con_pregunta_final("¡Perfecto! 😊", session_attributes, "ConsultarSedes")
 
@@ -1298,6 +1293,7 @@ def _mostrar_error_transicion_sedes(session_attributes):
         "🤔 No entendí tu respuesta. Por favor, selecciona una opción válida:\n\n"
         "1️⃣ Otra ciudad\n"
         "2️⃣ Otra sede\n"
+        "3️⃣ No gracias\n\n"
         "🏠 M Menú principal\n\n"
         "Responde con el número (1, 2, 3 ó M para volver al menu principal):"
     )
@@ -1455,124 +1451,6 @@ def manejar_consulta_horarios(intent, session_attributes, slots, input_transcrip
 
     print("Saliendo de manejar_consulta_horarios sin return")
     return None
-
-###############################
-# Control de Entradas No Reconocidas
-###############################
-
-def incrementar_contador_no_reconocidas(session_attributes):
-    """Incrementa el contador de entradas no reconocidas"""
-    contador_actual = int(session_attributes.get("entradas_no_reconocidas", 0))
-    contador_nuevo = contador_actual + 1
-    session_attributes["entradas_no_reconocidas"] = str(contador_nuevo)
-    
-    print(f"🔢 Contador entradas no reconocidas: {contador_nuevo}")
-    return contador_nuevo
-
-def resetear_contador_no_reconocidas(session_attributes):
-    """Resetea el contador de entradas no reconocidas"""
-    session_attributes.pop("entradas_no_reconocidas", None)
-    session_attributes.pop("esperando_respuesta_asesor", None)
-    print("✅ Contador de entradas no reconocidas reseteado")
-
-def debe_ofrecer_asesor(session_attributes):
-    """Verifica si debe ofrecer hablar con asesor"""
-    contador = int(session_attributes.get("entradas_no_reconocidas", 0))
-    return contador >= 2
-
-def ofrecer_hablar_con_asesor(session_attributes):
-    """Ofrece la opción de hablar con un asesor"""
-    session_attributes["esperando_respuesta_asesor"] = "true"
-    
-    return {
-        "sessionState": {
-            "dialogAction": {"type": "ElicitIntent"},
-            "sessionAttributes": session_attributes
-        },
-        "messages": [{
-            "contentType": "PlainText",
-            "content": (
-                "🤔 Veo que no he logrado entender tus últimas consultas.\n\n"
-                "¿Te gustaría hablar con uno de nuestros asesores para recibir ayuda personalizada?\n\n"
-                "💬 Responde:\n"
-                "• **'Sí'** - Para conectarte con un asesor\n"
-                "• **'No'** - Para volver al menú principal\n\n"
-                "¿Qué prefieres?"
-            )
-        }]
-    }
-
-def procesar_respuesta_asesor(input_transcript, session_attributes):
-    """Procesa la respuesta del usuario sobre hablar con asesor"""
-    if session_attributes.get("esperando_respuesta_asesor") != "true":
-        return None
-    
-    input_lower = input_transcript.lower().strip()
-    print(f"🔍 Procesando respuesta asesor: '{input_lower}'")
-    
-    # Limpiar bandera
-    session_attributes.pop("esperando_respuesta_asesor", None)
-    resetear_contador_no_reconocidas(session_attributes)
-    
-    # Respuestas afirmativas - solicitar calificación ANTES de pasar a asesor
-    if any(palabra in input_lower for palabra in [
-        "si", "sí", "yes", "claro", "vale", "ok", "por supuesto", 
-        "quiero", "necesito", "asesor", "ayuda"
-    ]):
-        print("✅ Usuario quiere hablar con asesor - solicitando calificación primero")
-        
-        # 🆕 MARCAR QUE DESPUÉS DE CALIFICAR VA A ASESOR
-        session_attributes["despues_calificacion_asesor"] = "true"
-        session_attributes["esperando_calificacion"] = "true"
-        
-        return {
-            "sessionState": {
-                "dialogAction": {"type": "ElicitIntent"},
-                "sessionAttributes": session_attributes
-            },
-            "messages": [{
-                "contentType": "PlainText",
-                "content": (
-                    "¡Perfecto! Antes de conectarte con un asesor, nos gustaría conocer tu experiencia con el asistente virtual.\n\n"
-                    "¿Podrías calificar tu experiencia?\n\n"
-                    "⭐ 1 estrella - Muy mala\n"
-                    "⭐⭐ 2 estrellas - Mala\n"
-                    "⭐⭐⭐ 3 estrellas - Regular\n"
-                    "⭐⭐⭐⭐ 4 estrellas - Buena\n"
-                    "⭐⭐⭐⭐⭐ 5 estrellas - Excelente\n\n"
-                    "💬 **Responde con un número del 1 al 5:**"
-                )
-            }]
-        }
-    
-    # Respuestas negativas - volver al menú principal
-    elif any(palabra in input_lower for palabra in [
-        "no", "nada", "gracias", "menu", "menú", "principal", "no gracias"
-    ]):
-        print("✅ Usuario no quiere asesor - volviendo al menú principal")
-        return mostrar_menu_principal(session_attributes)
-    
-    # Respuesta no clara - preguntar de nuevo
-    else:
-        print(f"❌ Respuesta no clara sobre asesor: '{input_transcript}'")
-        session_attributes["esperando_respuesta_asesor"] = "true"
-        
-        return {
-            "sessionState": {
-                "dialogAction": {"type": "ElicitIntent"},
-                "sessionAttributes": session_attributes
-            },
-            "messages": [{
-                "contentType": "PlainText",
-                "content": (
-                    "🤔 No entendí tu respuesta.\n\n"
-                    "¿Quieres hablar con un asesor?\n\n"
-                    "💬 Responde solo:\n"
-                    "• **'Sí'** - Para conectarte con un asesor\n"
-                    "• **'No'** - Para volver al menú principal"
-                )
-            }]
-        }
 
 ###############################
 # Verificar si es input valido
@@ -2096,12 +1974,9 @@ def procesar_seleccion_menu(input_transcript, session_attributes):
         intent_seleccionado = opciones_menu[input_limpio]
         print(f"✅ Usuario seleccionó opción {input_limpio}: {intent_seleccionado}")
         
-        # ✅ RESETEAR CONTADOR AL SELECCIONAR OPCIÓN VÁLIDA
-        resetear_contador_no_reconocidas(session_attributes)
-        
         resultado_redireccion = redirigir_a_intencion(intent_seleccionado, session_attributes)
         
-        # MANEJAR EL CASO CUANDO RETORNA None
+        # ✅ MANEJAR EL CASO CUANDO RETORNA None
         if resultado_redireccion is None:
             print("🔄 Redireccion retornó None - necesita procesar en lambda_handler")
             # Retornar datos para que lambda_handler continúe el flujo
@@ -2117,13 +1992,6 @@ def procesar_seleccion_menu(input_transcript, session_attributes):
     # VALIDACIÓN PREVIA: Verificar si el input tiene sentido antes de enviar a Bedrock
     elif not es_input_valido(input_transcript):
         print(f"🚫 Input inválido detectado: '{input_transcript}' - No enviando a Bedrock")
-        
-        # ✅ INCREMENTAR CONTADOR Y VERIFICAR SI DEBE OFRECER ASESOR
-        contador = incrementar_contador_no_reconocidas(session_attributes)
-        
-        if debe_ofrecer_asesor(session_attributes):
-            print("🤖 Ofreciendo hablar con asesor por múltiples entradas no reconocidas")
-            return ofrecer_hablar_con_asesor(session_attributes)
         
         session_attributes["esperando_seleccion_menu"] = "true"
         
@@ -2361,9 +2229,6 @@ def procesar_seleccion_menu(input_transcript, session_attributes):
             if intent_clasificado in intenciones_validas:
                 print(f"✅ Bedrock clasificó como: {intent_clasificado}")
                 
-                # ✅ RESETEAR CONTADOR AL CLASIFICAR CORRECTAMENTE
-                resetear_contador_no_reconocidas(session_attributes)
-                
                 # Configurar session_attributes con el input original para contexto
                 session_attributes["input_original_menu"] = input_transcript
                 print(f"🔍 DEBUG: Guardando input_original_menu = '{input_transcript}'")
@@ -2383,18 +2248,11 @@ def procesar_seleccion_menu(input_transcript, session_attributes):
                     # Si la redirección retorna una respuesta, enviarla
                     return resultado_redireccion
             else:
-                print(f"⚠️ Bedrock respondió: {intent_clasificado} - Incrementando contador")
+                print(f"⚠️ Bedrock respondió: {intent_clasificado} - Mostrando menú nuevamente")
                 raise ValueError("Intención no válida o input sin sentido")
                 
         except Exception as e:
             print(f"❌ Error clasificando con Bedrock: {e}")
-            
-            # ✅ INCREMENTAR CONTADOR Y VERIFICAR SI DEBE OFRECER ASESOR
-            contador = incrementar_contador_no_reconocidas(session_attributes)
-            
-            if debe_ofrecer_asesor(session_attributes):
-                print("🤖 Ofreciendo hablar con asesor por múltiples entradas no reconocidas")
-                return ofrecer_hablar_con_asesor(session_attributes)
             
             # Fallback: Mostrar menú nuevamente con sugerencia
             session_attributes["esperando_seleccion_menu"] = "true"
@@ -2750,31 +2608,7 @@ def redirigir_a_intencion(intent_clasificado, session_attributes):
             }]
         }
     
-    #  VENTA - Debe entrar al flujo completo
-    elif intent_clasificado == "Venta":
-        # ✅ CONFIGURAR FLUJO ACTIVO PARA VENTA
-        session_attributes["en_flujo_activo"] = intent_clasificado
-        
-        #  FORZAR QUE SE EJECUTE EL FLUJO COMPLETO DE VENTA
-        return {
-            "continuar_flujo": True,
-            "intent_name": intent_clasificado,
-            "session_attributes": session_attributes
-        }
-    
-    #  FQABODYTECH - También debe entrar al flujo completo
-    elif intent_clasificado == "FQABodytech":
-        # ✅ CONFIGURAR FLUJO ACTIVO PARA FQABodytech
-        session_attributes["en_flujo_activo"] = intent_clasificado
-        
-        #  FORZAR QUE SE EJECUTE EL FLUJO COMPLETO DE FQABodytech
-        return {
-            "continuar_flujo": True,
-            "intent_name": intent_clasificado,
-            "session_attributes": session_attributes
-        }
-    
-    # Para otras intenciones, usar el flujo anterior
+    # Para FQABodytech y Venta - intenciones que NO requieren documento
     else:
         # Configurar flujo activo para todas las intenciones
         session_attributes["en_flujo_activo"] = intent_clasificado
@@ -2956,6 +2790,199 @@ def _procesar_otra_fecha(session_attributes):
     }
 
 #####################################
+# Manejar logica de transicion asesor
+####################################
+
+def incrementar_contador_no_reconocidas(session_attributes):
+    """Incrementa el contador de entradas no reconocidas"""
+    contador_actual = int(session_attributes.get("entradas_no_reconocidas", 0))
+    contador_nuevo = contador_actual + 1
+    session_attributes["entradas_no_reconocidas"] = str(contador_nuevo)
+    
+    print(f"🔢 Contador entradas no reconocidas: {contador_nuevo}")
+    return contador_nuevo
+
+def resetear_contador_no_reconocidas(session_attributes):
+    """Resetea el contador de entradas no reconocidas"""
+    session_attributes.pop("entradas_no_reconocidas", None)
+    session_attributes.pop("esperando_respuesta_asesor", None)
+    print("✅ Contador de entradas no reconocidas reseteado")
+
+def debe_ofrecer_asesor(session_attributes):
+    """Verifica si debe ofrecer hablar con asesor"""
+    contador = int(session_attributes.get("entradas_no_reconocidas", 0))
+    return contador >= 2
+
+def ofrecer_hablar_con_asesor(session_attributes):
+    """Ofrece la opción de hablar con un asesor"""
+    session_attributes["esperando_respuesta_asesor"] = "true"
+    
+    return {
+        "sessionState": {
+            "dialogAction": {"type": "ElicitIntent"},
+            "sessionAttributes": session_attributes
+        },
+        "messages": [{
+            "contentType": "PlainText",
+            "content": (
+                "🤔 Veo que no he logrado entender tus últimas consultas.\n\n"
+                "¿Te gustaría hablar con uno de nuestros asesores para recibir ayuda personalizada?\n\n"
+                "💬 Responde:\n"
+                "• **'Sí'** - Para conectarte con un asesor\n"
+                "• **'No'** - Para volver al menú principal\n\n"
+                "¿Qué prefieres?"
+            )
+        }]
+    }
+
+def procesar_respuesta_asesor(input_transcript, session_attributes):
+    """Procesa la respuesta del usuario sobre hablar con asesor"""
+    if session_attributes.get("esperando_respuesta_asesor") != "true":
+        return None
+    
+    input_lower = input_transcript.lower().strip()
+    print(f"🔍 Procesando respuesta asesor: '{input_lower}'")
+    
+    # Limpiar bandera
+    session_attributes.pop("esperando_respuesta_asesor", None)
+    resetear_contador_no_reconocidas(session_attributes)
+    
+    # Respuestas afirmativas - solicitar calificación ANTES de pasar a asesor
+    if any(palabra in input_lower for palabra in [
+        "si", "sí", "yes", "claro", "vale", "ok", "por supuesto", 
+        "quiero", "necesito", "asesor", "ayuda"
+    ]):
+        print("✅ Usuario quiere hablar con asesor - solicitando calificación primero")
+        
+        # 🆕 MARCAR QUE DESPUÉS DE CALIFICAR VA A ASESOR
+        session_attributes["despues_calificacion_asesor"] = "true"
+        session_attributes["esperando_calificacion"] = "true"
+        
+        return {
+            "sessionState": {
+                "dialogAction": {"type": "ElicitIntent"},
+                "sessionAttributes": session_attributes
+            },
+            "messages": [{
+                "contentType": "PlainText",
+                "content": (
+                    "¡Perfecto! Antes de conectarte con un asesor, nos gustaría conocer tu experiencia con el asistente virtual.\n\n"
+                    "¿Podrías calificar tu experiencia?\n\n"
+                    "⭐ 1 estrella - Muy mala\n"
+                    "⭐⭐ 2 estrellas - Mala\n"
+                    "⭐⭐⭐ 3 estrellas - Regular\n"
+                    "⭐⭐⭐⭐ 4 estrellas - Buena\n"
+                    "⭐⭐⭐⭐⭐ 5 estrellas - Excelente\n\n"
+                    "💬 **Responde con un número del 1 al 5:**"
+                )
+            }]
+        }
+    
+    # Respuestas negativas - volver al menú principal
+    elif any(palabra in input_lower for palabra in [
+        "no", "nada", "gracias", "menu", "menú", "principal", "no gracias"
+    ]):
+        print("✅ Usuario no quiere asesor - volviendo al menú principal")
+        return mostrar_menu_principal(session_attributes)
+    
+    # Respuesta no clara - preguntar de nuevo
+    else:
+        print(f"❌ Respuesta no clara sobre asesor: '{input_transcript}'")
+        session_attributes["esperando_respuesta_asesor"] = "true"
+        
+        return {
+            "sessionState": {
+                "dialogAction": {"type": "ElicitIntent"},
+                "sessionAttributes": session_attributes
+            },
+            "messages": [{
+                "contentType": "PlainText",
+                "content": (
+                    "🤔 No entendí tu respuesta.\n\n"
+                    "¿Quieres hablar con un asesor?\n\n"
+                    "💬 Responde solo:\n"
+                    "• **'Sí'** - Para conectarte con un asesor\n"
+                    "• **'No'** - Para volver al menú principal"
+                )
+            }]
+        }
+
+###############################
+# Verificar si es input valido
+###############################
+
+def es_input_valido(input_transcript):
+    """
+    Valida si el input del usuario es texto coherente o solo caracteres sin sentido
+    """
+    
+    # Limpiar el input
+    texto_limpio = input_transcript.strip().lower()
+    
+    # 1. Si está vacío, es inválido
+    if not texto_limpio:
+        return False
+    
+    # ✅ NUEVO: Si es solo números (posible documento), es válido
+    if texto_limpio.isdigit() and 4 <= len(texto_limpio) <= 15:
+        print(f"✅ Input válido (número de documento): '{texto_limpio}'")
+        return True
+    
+    # 2. Si es solo números largos sin sentido (más de 15 dígitos)
+    if texto_limpio.isdigit() and len(texto_limpio) > 15:
+        return False
+    
+    # 3. Si tiene más del 70% de caracteres repetidos o sin sentido
+    caracteres_unicos = len(set(texto_limpio.replace(" ", "")))
+    total_caracteres = len(texto_limpio.replace(" ", ""))
+    
+    if total_caracteres > 5 and caracteres_unicos / total_caracteres < 0.3:
+        print(f"🚫 Texto con pocos caracteres únicos: {caracteres_unicos}/{total_caracteres}")
+        return False
+    
+    # 4. ✅ MEJORAR: Detectar patrones de tecleo aleatorio (pero excluir palabras válidas)
+    # Lista de palabras válidas que pueden tener muchas consonantes
+    palabras_validas_consonantes = [
+        "country", "centro", "rumba", "spinning", "crossfit", "strength", "strong",
+        "chapinero", "normandia", "outlet", "portal", "tintal", "hayuelos", "cedritos",
+        "horarios", "tienen", "grupales", "clases", "horario", "consultar"
+    ]
+    
+    # Solo aplicar filtro de consonantes si NO contiene palabras válidas conocidas
+    contiene_palabra_valida = any(palabra in texto_limpio for palabra in palabras_validas_consonantes)
+    
+    if not contiene_palabra_valida:
+        patron_sin_sentido = re.compile(r'[bcdfghjklmnpqrstvwxyz]{6,}')  # Aumentar umbral a 6
+        if patron_sin_sentido.search(texto_limpio):
+            print(f"🚫 Patrón de consonantes detectado: {texto_limpio}")
+            return False
+    
+    # 5. Detectar secuencias de teclado obvias
+    secuencias_teclado = [
+        'qwerty', 'asdf', 'zxcv', 'qaz', 'wsx', 'edc', 'rfv', 'tgb', 'yhn', 'ujm',
+        'qlllq', 'asklj', 'lkjh', 'mnbv', 'poiu', 'wert', 'dfgh', 'cvbn'
+    ]
+    
+    for secuencia in secuencias_teclado:
+        if secuencia in texto_limpio:
+            print(f"🚫 Secuencia de teclado detectada: {secuencia}")
+            return False
+    
+    # 6. Si es muy corto pero no tiene sentido (menos de 3 caracteres válidos)
+    if len(texto_limpio.replace(" ", "")) < 3 and not any(palabra in texto_limpio for palabra in [
+        "si", "no", "ok", "hola", "bye", "m", "n", "1", "2", "3", "4", "5", "6", "7", "8", "9"
+    ]):
+        return False
+    
+    # 7. Detectar si NO tiene ninguna vocal (excepto números y palabras muy cortas)
+    if (len(texto_limpio) > 2 and 
+        not re.search(r'[aeiouáéíóú]', texto_limpio) and 
+        not texto_limpio.isdigit()):  # ✅ AGREGAR esta condición
+        print(f"🚫 Texto sin vocales: {texto_limpio}")
+        return False
+    
+    print(f"✅ Input válido: '{texto_limpio}'")
+    return True#####################################
 # Manejar logica de transicion asesor
 ####################################
 
