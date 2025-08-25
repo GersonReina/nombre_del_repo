@@ -478,11 +478,13 @@ def obtener_id_sede(nombre_sede):
     print(f"===== DEBUG OBTENER_ID_SEDE =====")
     print(f"Input original: '{nombre_sede}'")
     
-    # 🆕 VERIFICAR LONGITUD MÍNIMA PARA EVITAR MATCHES FALSOS
-    if len(nombre_sede.strip()) < 3:
-        print(f"❌ Input demasiado corto: '{nombre_sede}'")
-        print(f"===== FIN DEBUG OBTENER_ID_SEDE =====")
-        return None
+    # 🆕 VERIFICACIÓN ESPECIAL PARA DETECTAR PROBLEMA CON CENTRO MAYOR
+    if "centro" in nombre_sede.lower():
+        print(f"⚠️ ADVERTENCIA: Input contiene 'centro': '{nombre_sede}' - verificando contexto")
+        # Solo rechazar si es "centro" individual, NO si es "centro mayor" completo
+        if nombre_sede.lower().strip() == "centro":
+            print(f"🛑 STOP: Input es solo 'centro' - muy ambiguo, podría ser parte de sede compuesta")
+            return None
     
     # Verificar si el input es una ciudad conocida
     ciudades_conocidas = [
@@ -498,18 +500,6 @@ def obtener_id_sede(nombre_sede):
     # Si el input es una ciudad, retornar None inmediatamente
     if nombre_normalizado in [normalizar_nombre(c) for c in ciudades_conocidas]:
         print(f"❌ '{nombre_sede}' es una CIUDAD, no una sede. Retornando None.")
-        print(f"===== FIN DEBUG OBTENER_ID_SEDE =====")
-        return None
-    
-    # 🆕 LISTA DE PALABRAS QUE NO PUEDEN SER SEDES
-    palabras_prohibidas = [
-        "en", "de", "del", "la", "el", "que", "tiene", "tienen", "saber", 
-        "quiero", "clases", "horarios", "centro", "mayor", "para", "con"
-    ]
-    
-    if nombre_normalizado in palabras_prohibidas:
-        print(f"❌ '{nombre_sede}' es palabra prohibida. Retornando None.")
-        print(f"===== FIN DEBUG OBTENER_ID_SEDE =====")
         return None
     sedes_map = {
         "ejecutivos": 90,
@@ -604,22 +594,34 @@ def obtener_id_sede(nombre_sede):
         if nombre_normalizado == normalizar_nombre(sede_key):
             resultado = sedes_map[sede_key]
             print(f"✅ ENCONTRADO EXACTO: '{nombre_sede}' → '{sede_key}' (ID: {resultado})")
-            print(f"===== FIN DEBUG OBTENER_ID_SEDE =====")
             return resultado
     
-    # 2. 🆕 BÚSQUEDA MÁS ESTRICTA CON difflib - SOLO MATCHES > 85%
-    matches = difflib.get_close_matches(nombre_normalizado, [normalizar_nombre(s) for s in sedes_map.keys()], n=1, cutoff=0.85)
+    # 2. Búsqueda con difflib - PERO CON VERIFICACIONES ESPECIALES
+    todas_sedes = list(sedes_map.keys())
+    
+    # 🆕 VERIFICAR SI EL INPUT PODRÍA SER PARTE DE UNA SEDE COMPUESTA
+    palabras_problematicas = ["centro", "mayor", "plaza", "portal", "calle", "autopista", "torre", "gran"]
+    if any(palabra in nombre_sede.lower() for palabra in palabras_problematicas):
+        print(f"⚠️ Input contiene palabra problemática que podría ser parte de sede compuesta: '{nombre_sede}'")
+        # Usar cutoff más alto para evitar falsos positivos
+        matches = difflib.get_close_matches(nombre_sede.lower(), todas_sedes, n=1, cutoff=0.85)
+    else:
+        matches = difflib.get_close_matches(nombre_sede.lower(), todas_sedes, n=1, cutoff=0.6)
+    
     if matches:
-        match_encontrado = matches[0]
-        for sede_key in sedes_map:
-            if normalizar_nombre(sede_key) == match_encontrado:
-                resultado = sedes_map[sede_key]
-                print(f"✅ ENCONTRADO (difflib 85%): '{nombre_sede}' → '{sede_key}' (ID: {resultado})")
-                print(f"===== FIN DEBUG OBTENER_ID_SEDE =====")
-                return resultado
+        sede_encontrada = matches[0]
+        resultado = sedes_map[sede_encontrada]
+        print(f"✅ ENCONTRADO (difflib): '{nombre_sede}' → '{sede_encontrada}' (ID: {resultado})")
+        
+        # 🆕 VERIFICACIÓN ADICIONAL: Si el match es "llanocentro" pero el input es "centro", rechazar
+        if sede_encontrada == "llanocentro" and nombre_sede.lower().strip() == "centro":
+            print(f"🛑 RECHAZADO: '{nombre_sede}' matched con 'llanocentro' pero es muy ambiguo")
+            return None
+            
+        return resultado
     
     print(f"❌ NO ENCONTRADO: '{nombre_sede}'")
-    print(f"===== FIN DEBUG OBTENER_ID_SEDE =====")
+    print("===== FIN DEBUG OBTENER_ID_SEDE =====")
     return None
 
 def obtener_nombre_sede_por_id(sede_id):
@@ -1676,43 +1678,9 @@ Responde únicamente con el JSON válido:
     
     return None
 
-def extraer_y_validar_slots_grupales(input_transcript, session_attributes, intent):
-    """
-    Extrae y valida parámetros para ConsultaGrupales desde texto libre.
-    NUEVA FUNCIONALIDAD: Maneja clases + sedes de otras ciudades mejor
-    """
-    print(f"🔍 === INICIO extraer_y_validar_slots_grupales ===")
-    print(f"🔍 Input: '{input_transcript}'")
-    print(f"🔍 Session attributes: {session_attributes}")
-    
-    slots = intent.get("slots", {})
-    
-    # Variables de extracción
-    ciudad_id = session_attributes.get("ciudad_id")
-    ciudad = session_attributes.get("ciudad_nombre") or session_attributes.get("ciudad")
-    sede_id = session_attributes.get("sede_id")
-    sede_nombre = session_attributes.get("sede_nombre")
-    clase_id = session_attributes.get("clase_id")
-    clase_nombre = session_attributes.get("clase_nombre")
-    fecha = None  # ✅ INICIALIZAR FECHA COMO None
-    
-    print(f"🔍 Variables de sesión - ciudad_id: {ciudad_id}, sede_id: {sede_id}, clase_id: {clase_id}")
-    
-    # ✅ PALABRAS GENÉRICAS QUE NO DEBEN SER INTERPRETADAS COMO ENTIDADES
-    palabras_genericas = {
-        "que", "clases", "clase", "actividades", "actividad", "grupales", "grupal",
-        "horarios", "horario", "ejercicios", "ejercicio", "entrenamientos", 
-        "entrenamiento", "deportes", "deporte", "fitness", "gimnasio",
-        "sede", "sedes", "ciudad", "ciudades", "donde", "hay", "tienen",
-        "consultar", "consulta", "ver", "mostrar", "informacion", "info",
-        "quiero", "saber", "conocer", "necesito", "dame", "dime", "por favor",
-        "favor", "ayuda", "ayudar", "en", "de", "del", "la", "el", "las", "los",
-        "una", "un", "unas", "unos", "para", "con", "sin", "sobre", "desde",
-        "hasta", "entre", "durante", "dentro", "fuera", "cerca", "lejos"
-    }
-    
-    # 🆕 MAPEO EXPLÍCITO DE SEDES CON NOMBRES COMPUESTOS
-    sedes_compuestas = {
+def obtener_sedes_compuestas():
+    """Retorna el mapeo de sedes compuestas"""
+    return {
         "centro mayor": {"id": 8, "nombre": "Centro Mayor"},
         "calle 90": {"id": 122, "nombre": "Calle 90"},
         "autopista 170": {"id": 11, "nombre": "Autopista 170"},
@@ -1723,6 +1691,8 @@ def extraer_y_validar_slots_grupales(input_transcript, session_attributes, inten
         "plaza central": {"id": 103, "nombre": "Plaza Central"},
         "pablo vi": {"id": 34, "nombre": "Pablo VI"},
         "country 138": {"id": 116, "nombre": "Country 138"},
+        "country": {"id": 116, "nombre": "Country 138"},
+        "country club": {"id": 116, "nombre": "Country 138"},
         "portal 80": {"id": 37, "nombre": "Portal 80"},
         "plaza bosa": {"id": 115, "nombre": "Plaza Bosa"},
         "paseo del rio": {"id": 126, "nombre": "Paseo del Rio"},
@@ -1744,6 +1714,44 @@ def extraer_y_validar_slots_grupales(input_transcript, session_attributes, inten
         "camino real": {"id": 77, "nombre": "Camino Real"},
         "san lucas": {"id": 66, "nombre": "San Lucas"},
         "san juan": {"id": 80, "nombre": "San Juan"}
+    }
+
+def extraer_y_validar_slots_grupales(input_transcript, session_attributes, intent):
+    """
+    Extrae y valida parámetros para ConsultaGrupales desde texto libre.
+    NUEVA FUNCIONALIDAD: Maneja clases + sedes de otras ciudades mejor
+    """
+    print(f"🔍 === INICIO extraer_y_validar_slots_grupales ===")
+    print(f"🔍 Input: '{input_transcript}'")
+    print(f"🔍 Session attributes: {session_attributes}")
+    
+    # 🆕 VERIFICACIÓN ESPECIAL PARA CENTRO MAYOR
+    if "centro mayor" in input_transcript.lower():
+        print("🎯 DETECTADO 'centro mayor' en input - activando búsqueda de sedes compuestas")
+    
+    slots = intent.get("slots", {})
+    
+    # Variables de extracción
+    ciudad_id = session_attributes.get("ciudad_id")
+    ciudad = session_attributes.get("ciudad_nombre") or session_attributes.get("ciudad")
+    sede_id = session_attributes.get("sede_id")
+    sede_nombre = session_attributes.get("sede_nombre")
+    clase_id = session_attributes.get("clase_id")
+    clase_nombre = session_attributes.get("clase_nombre")
+    fecha = None  # ✅ INICIALIZAR FECHA COMO None
+    
+    print(f"🔍 Variables de sesión - ciudad_id: {ciudad_id}, sede_id: {sede_id}, clase_id: {clase_id}")
+    
+    # ✅ PALABRAS GENÉRICAS QUE NO DEBEN SER INTERPRETADAS COMO ENTIDADES
+    palabras_genericas = {
+        "que", "clases", "clase", "actividades", "actividad", "grupales", "grupal",
+        "horarios", "horario", "ejercicios", "ejercicio", "entrenamientos", 
+        "entrenamiento", "deportes", "deporte", "fitness", "gimnasio",
+        "sede", "sedes", "ciudad", "ciudades", "donde", "hay", "tienen",
+        "consultar", "consulta", "ver", "mostrar", "informacion", "info",
+        "hola", "buenos", "dias", "tardes", "noches", "saludos", "ayuda",
+        "gracias", "por", "favor", "quiero", "necesito", "deseo", "como",
+        "cuando", "para", "con", "sin", "hasta", "desde", "sobre", "entre"
     }
     
     # ✅ EXTRACCIÓN MEJORADA CON FILTRO DE PALABRAS GENÉRICAS
@@ -1817,150 +1825,220 @@ def extraer_y_validar_slots_grupales(input_transcript, session_attributes, inten
     if fecha:
         session_attributes["fecha"] = fecha
     
-    # PASO 1: EXTRAER SEDE con prioridad en sedes compuestas
-    if not sede_id and input_transcript:
-        print("🔍 Intentando extraer sede...")
-        
-        # 🆕 NORMALIZAR INPUT PARA COMPARACIÓN
-        input_normalizado = normalizar_nombre(input_transcript.lower())
-        
-        # 🆕 BUSCAR SEDES COMPUESTAS PRIMERO (MAYOR PRIORIDAD)
-        print("🔍 Buscando sedes compuestas...")
-        for sede_compuesta, datos_sede in sedes_compuestas.items():
-            sede_normalizada = normalizar_nombre(sede_compuesta)
-            
-            # Buscar la sede compuesta en el input
-            if sede_normalizada in input_normalizado:
-                print(f"🎯 ¡SEDE COMPUESTA ENCONTRADA! '{sede_compuesta}' en '{input_transcript}'")
-                
-                sede_id = datos_sede["id"]
-                sede_nombre = datos_sede["nombre"]
-                
-                # Obtener ciudad de la sede
-                ciudad_info = obtener_ciudad_fallback_por_sede(sede_id)
-                if ciudad_info:
-                    ciudad_id = ciudad_info["id"]
-                    ciudad_nombre = ciudad_info["nombre"]
+    # PASO 2: EXTRAER ENTIDADES ESPECÍFICAS (FILTRANDO PALABRAS GENÉRICAS)
+    # 1. Buscar frases compuestas primero (ej: "san juan")
+    for i in range(len(palabras) - 1):
+        frase = f"{palabras[i]} {palabras[i+1]}"
+        # Verificar que la frase no sea genérica
+        if not any(p in frase for p in palabras_genericas):
+            # Buscar sede con frase compuesta
+            if not sede_id:
+                test_sede_id = obtener_id_sede(frase)
+                if test_sede_id:
+                    sede_id = test_sede_id
+                    sede_nombre = obtener_nombre_sede_por_id(test_sede_id)
+                    session_attributes["sede_id"] = str(sede_id)
+                    session_attributes["sede_nombre"] = sede_nombre
+                    print(f"✅ Sede detectada (frase): {sede_nombre} (ID: {sede_id})")
                     
-                    session_attributes["ciudad_id"] = str(ciudad_id)
-                    session_attributes["ciudad_nombre"] = ciudad_nombre
-                    
-                session_attributes["sede_id"] = str(sede_id)
-                session_attributes["sede_nombre"] = sede_nombre
-                
-                print(f"✅ Sede compuesta detectada: {sede_nombre} (ID: {sede_id}) en {ciudad_nombre}")
-                break
-        
-        # Si no se encontró sede compuesta, usar el método anterior con mejoras
-        if not sede_id:
-            print("🔍 Buscando sedes simples...")
-            
-            # Dividir input en palabras y buscar combinaciones
-            palabras = input_transcript.lower().split()
-            
-            # 🆕 BUSCAR COMBINACIONES DE 2-3 PALABRAS PARA SEDES COMPUESTAS
-            for i in range(len(palabras)):
-                # Combinaciones de 3 palabras
-                if i + 2 < len(palabras):
-                    combinacion_3 = " ".join(palabras[i:i+3])
-                    if combinacion_3 in sedes_compuestas:
-                        datos_sede = sedes_compuestas[combinacion_3]
-                        sede_id = datos_sede["id"]
-                        sede_nombre = datos_sede["nombre"]
-                        print(f"✅ Sede de 3 palabras encontrada: {sede_nombre}")
-                        break
-                
-                # Combinaciones de 2 palabras
-                if i + 1 < len(palabras):
-                    combinacion_2 = " ".join(palabras[i:i+2])
-                    if combinacion_2 in sedes_compuestas:
-                        datos_sede = sedes_compuestas[combinacion_2]
-                        sede_id = datos_sede["id"]
-                        sede_nombre = datos_sede["nombre"]
-                        print(f"✅ Sede de 2 palabras encontrada: {sede_nombre}")
-                        break
-                
-                # Palabras individuales (pero no genéricas)
-                palabra = palabras[i]
-                if (len(palabra) > 2 and 
-                    palabra not in palabras_genericas and
-                    not palabra.isdigit()):
-                    
-                    sede_encontrada_id = obtener_id_sede(palabra)
-                    if sede_encontrada_id:
-                        sede_id = sede_encontrada_id
-                        sede_nombre = obtener_nombre_sede_por_id(sede_id)
-                        print(f"✅ Sede individual encontrada: {sede_nombre}")
-                        break
-            
-            # Actualizar session attributes si se encontró sede
-            if sede_id:
-                # Obtener ciudad de la sede
-                ciudad_info = obtener_ciudad_fallback_por_sede(sede_id)
-                if ciudad_info:
-                    ciudad_id = ciudad_info["id"]
-                    ciudad_nombre = ciudad_info["nombre"]
-                    
-                    session_attributes["ciudad_id"] = str(ciudad_id)
-                    session_attributes["ciudad_nombre"] = ciudad_nombre
-                    
-                session_attributes["sede_id"] = str(sede_id)
-                session_attributes["sede_nombre"] = sede_nombre
-    
-    # PASO 2: EXTRAER CLASE (mantener lógica existente)
-    if not clase_id and input_transcript:
-        print("🔍 Intentando extraer clase...")
-        
-        palabras = input_transcript.lower().split()
-        for palabra in palabras:
-            if (len(palabra) > 2 and 
-                palabra not in palabras_genericas and
-                not palabra.isdigit()):
-                
-                clase_id_encontrada = obtener_id_actividad_estricto(palabra)
-                if clase_id_encontrada:
-                    clase_id = clase_id_encontrada
-                    clase_nombre = obtener_nombre_actividad_por_id(clase_id)
-                    session_attributes["clase_id"] = str(clase_id)
-                    session_attributes["clase_nombre"] = clase_nombre
-                    print(f"✅ Clase extraída: {clase_nombre}")
+                    # AUTO-DETECTAR CIUDAD POR SEDE
+                    if not ciudad_id:
+                        ciudad_info = obtener_ciudad_fallback_por_sede(sede_id)
+                        if ciudad_info:
+                            ciudad_id = ciudad_info["id"]
+                            ciudad = ciudad_info["nombre"]
+                            session_attributes["ciudad_id"] = str(ciudad_id)
+                            session_attributes["ciudad_nombre"] = ciudad
+                            print(f"✅ Ciudad auto-detectada por sede: {ciudad} (ID: {ciudad_id})")
                     break
     
-    # PASO 3: EXTRAER FECHA (mantener lógica existente)
-    fecha = None
-    if input_transcript:
-        print("🔍 Intentando extraer fecha...")
-        
-        palabras = input_transcript.lower().split()
+    # 2. Buscar ciudad por nombre (SOLO PALABRAS NO GENÉRICAS)
+    if not ciudad_id:
         for palabra in palabras:
-            if (len(palabra) > 2 and 
-                palabra not in palabras_genericas and
-                not palabra.isdigit()):
-                
-                fecha_normalizada, error_fecha = normalizar_fecha(palabra)
-                if fecha_normalizada:
-                    fecha = fecha_normalizada
-                    session_attributes["fecha_temporal"] = fecha
-                    print(f"✅ Fecha extraída: {fecha}")
+            if palabra not in palabras_genericas:
+                # Crear estructura de slots temporal para validar ciudad
+                slots_temp = {"ciudad": {"value": {"interpretedValue": palabra}}}
+                try:
+                    ciudad_id_temp, ciudad_nombre_temp, session_attributes_temp, _ = validar_ciudad_usuario(
+                        slots_temp, session_attributes, palabra, intent
+                    )
+                    if ciudad_id_temp:
+                        ciudad_id = ciudad_id_temp
+                        ciudad = ciudad_nombre_temp
+                        session_attributes["ciudad_id"] = str(ciudad_id)
+                        session_attributes["ciudad_nombre"] = ciudad
+                        print(f"✅ Ciudad detectada: {ciudad} (ID: {ciudad_id})")
+                        break
+                except Exception as e:
+                    print(f"❌ Error validando ciudad '{palabra}': {e}")
+                    continue
+    
+    # 3. Buscar clase en el input (SOLO PALABRAS NO GENÉRICAS Y CON CUTOFF ALTO)
+    if not clase_id:
+        # Primero buscar coincidencias exactas
+        for palabra in palabras:
+            if palabra not in palabras_genericas and len(palabra) >= 4:  # ✅ Mínimo 4 caracteres
+                test_clase_id = obtener_id_actividad_estricto(palabra)  # ✅ Función más estricta
+                if test_clase_id:
+                    # Verificar si es coincidencia exacta
+                    nombre_actividad = obtener_nombre_actividad_por_id(test_clase_id)
+                    if nombre_actividad and palabra.lower() == nombre_actividad.lower():
+                        clase_id = test_clase_id
+                        clase_nombre = nombre_actividad
+                        session_attributes["clase_id"] = str(clase_id)
+                        session_attributes["clase_nombre"] = clase_nombre
+                        print(f"✅ Clase detectada (exacta): {clase_nombre} (ID: {clase_id})")
+                        break
+        
+        # Si no hay coincidencia exacta, buscar aproximadas con cutoff alto
+        if not clase_id:
+            for palabra in palabras:
+                if palabra not in palabras_genericas and len(palabra) >= 5:  # ✅ Mínimo 5 caracteres para aproximadas
+                    test_clase_id = obtener_id_actividad_estricto(palabra)
+                    if test_clase_id:
+                        clase_id = test_clase_id
+                        clase_nombre = obtener_nombre_actividad_por_id(test_clase_id)
+                        session_attributes["clase_id"] = str(clase_id)
+                        session_attributes["clase_nombre"] = clase_nombre
+                        print(f"✅ Clase detectada (aproximada): {clase_nombre} (ID: {clase_id})")
+                        break
+    
+    # 4. Buscar sede individual solo si no se encontró con frases compuestas (FILTRADO)
+    if not sede_id:
+        for palabra in palabras:
+            if palabra not in palabras_genericas and len(palabra) >= 4:  # ✅ Mínimo 4 caracteres
+                test_sede_id = obtener_id_sede_estricto(palabra)  # ✅ Función más estricta
+                if test_sede_id:
+                    sede_id = test_sede_id
+                    sede_nombre = obtener_nombre_sede_por_id(test_sede_id)
+                    session_attributes["sede_id"] = str(sede_id)
+                    session_attributes["sede_nombre"] = sede_nombre
+                    print(f"✅ Sede detectada: {sede_nombre} (ID: {sede_id})")
+                    
+                    # AUTO-DETECTAR CIUDAD POR SEDE
+                    if not ciudad_id:
+                        ciudad_info = obtener_ciudad_fallback_por_sede(sede_id)
+                        if ciudad_info:
+                            ciudad_id = ciudad_info["id"]
+                            ciudad = ciudad_info["nombre"]
+                            session_attributes["ciudad_id"] = str(ciudad_id)
+                            session_attributes["ciudad_nombre"] = ciudad
+                            print(f"✅ Ciudad auto-detectada por sede: {ciudad} (ID: {ciudad_id})")
                     break
     
     print(f"🔍 Estado después de extracción - ciudad_id: {ciudad_id}, sede_id: {sede_id}, clase_id: {clase_id}, fecha: {fecha}")
     
-    # Si tenemos al menos algunos parámetros válidos, retornar para flujo normal
-    if ciudad_id or sede_id or clase_id:
-        print("✅ Tenemos algunos parámetros - retornando para flujo normal de ConsultaGrupales")
+    # ===== LÓGICA DE CASOS =====
+    
+    # CASO A: Tenemos ciudad, sede, clase y fecha - COMPLETAMENTE LISTO
+    if ciudad_id and sede_id and clase_id and fecha:
+        print("✅ CASO A: Datos completos - listo para consulta")
+        # Actualizar session_attributes con todos los datos
+        session_attributes["ciudad_id"] = str(ciudad_id)
+        session_attributes["ciudad_nombre"] = ciudad
+        session_attributes["sede_id"] = str(sede_id)
+        session_attributes["sede_nombre"] = sede_nombre
+        session_attributes["clase_id"] = str(clase_id)
+        session_attributes["clase_nombre"] = clase_nombre
+        session_attributes["fecha"] = fecha
+        session_attributes["tipo_consulta_implícita"] = "2"  # Consulta específica de clase
+        print(f"🎯 CONSULTA DIRECTA: {clase_nombre} en {sede_nombre} ({ciudad}) para {fecha}")
+        
         return {
-            "session_attributes": session_attributes,
-            "ciudad_id": ciudad_id,
-            "ciudad_nombre": session_attributes.get("ciudad_nombre"),
-            "sede_id": sede_id,
-            "sede_nombre": session_attributes.get("sede_nombre"),
-            "clase_id": clase_id,
-            "clase_nombre": session_attributes.get("clase_nombre"),
-            "fecha": fecha
+            "ciudad_id": int(ciudad_id),
+            "ciudad_nombre": ciudad,
+            "sede_id": int(sede_id),
+            "sede_nombre": sede_nombre,
+            "clase_id": int(clase_id),
+            "clase_nombre": clase_nombre,
+            "fecha": fecha,
+            "tipo_consulta": "2",  # Horarios de una clase específica
+            "consulta_directa": True,  # Flag para indicar que está listo
+            "session_attributes": session_attributes
         }
     
-    print("❌ No se pudieron extraer parámetros válidos")
+    # CASO B: Tenemos ciudad, sede y fecha (SIN clase) - Asumir consulta tipo 1 (todas las clases)
+    elif ciudad_id and sede_id and fecha and not clase_id:
+        print("✅ CASO B: Ciudad + Sede + Fecha (sin clase) - Consulta tipo 1")
+        # Actualizar session_attributes con todos los datos
+        session_attributes["ciudad_id"] = str(ciudad_id)
+        session_attributes["ciudad_nombre"] = ciudad
+        session_attributes["sede_id"] = str(sede_id)
+        session_attributes["sede_nombre"] = sede_nombre
+        session_attributes["fecha"] = fecha
+        session_attributes["tipo_consulta_implícita"] = "1"  # Todas las clases para esa fecha
+        print(f"🎯 CONSULTA DIRECTA: Todas las clases en {sede_nombre} ({ciudad}) para {fecha}")
+        
+        return {
+            "ciudad_id": int(ciudad_id),
+            "ciudad_nombre": ciudad,
+            "sede_id": int(sede_id),
+            "sede_nombre": sede_nombre,
+            "clase_id": None,
+            "clase_nombre": None,
+            "fecha": fecha,
+            "tipo_consulta": "1",
+            "consulta_directa": True,  # Flag para indicar que está listo
+            "session_attributes": session_attributes
+        }
+    
+    # CASO C: Solo fecha sin otros parámetros - Preguntar ciudad
+    elif fecha and not ciudad_id and not sede_id and not clase_id:
+        print("✅ CASO C: Solo fecha detectada - Preguntar ciudad")
+        return {
+            "sessionState": {
+                "dialogAction": {"type": "ElicitSlot", "slotToElicit": "ciudad"},
+                "intent": {
+                    "name": "ConsultaGrupales",
+                    "slots": intent.get("slots", {}),
+                    "state": "InProgress"
+                },
+                "sessionAttributes": session_attributes
+            },
+            "messages": [{
+                "contentType": "PlainText",
+                "content": f"Perfecto, veo que quieres consultar para el {fecha}. 📅\n\n¿En qué ciudad deseas consultar las clases grupales?"
+            }]
+        }
+    
+    # CASO D: Tenemos ciudad, sede y clase (SIN fecha) - Preguntar fecha
+    elif ciudad_id and sede_id and clase_id and not fecha:
+        print("✅ CASO D: Ciudad + Sede + Clase (sin fecha) - Preguntar fecha")
+        return {
+            "sessionState": {
+                "dialogAction": {"type": "ElicitSlot", "slotToElicit": "fecha"},
+                "intent": {
+                    "name": "ConsultaGrupales",
+                    "slots": intent.get("slots", {}),
+                    "state": "InProgress"
+                },
+                "sessionAttributes": session_attributes
+            },
+            "messages": [{
+                "contentType": "PlainText",
+                "content": f"Perfecto, veo que quieres consultar {clase_nombre} en la sede {sede_nombre}. 📅\n\n¿Para qué fecha? (Ejemplo: hoy, mañana, 15 de agosto, etc.)"
+            }]
+        }
+    
+    # Si tenemos algunos parámetros, retornar lo que tenemos para continuar flujo normal
+    if ciudad_id or sede_id or clase_id:
+        print("✅ Tenemos algunos parámetros - retornando para flujo normal de ConsultaGrupales")
+        resultado = {"session_attributes": session_attributes}
+        if ciudad_id:
+            resultado["ciudad_id"] = ciudad_id
+            resultado["ciudad_nombre"] = ciudad
+        if sede_id:
+            resultado["sede_id"] = sede_id
+            resultado["sede_nombre"] = sede_nombre
+        if clase_id:
+            resultado["clase_id"] = clase_id
+            resultado["clase_nombre"] = clase_nombre
+        if fecha:
+            resultado["fecha"] = fecha
+        return resultado
+    
+    # Si no encontramos nada, retornar None para flujo normal
+    print("❌ No se detectaron parámetros - continuando flujo normal")
     return None
 
 def obtener_id_actividad_estricto(nombre_actividad):
@@ -2655,9 +2733,75 @@ def extraer_y_validar_slots_sedes(input_transcript, session_attributes, intent):
                 except Exception as e:
                     print(f"❌ Error validando ciudad {ciudad_oficial}: {e}")
     
-    # PASO 2: EXTRAER SEDE si tenemos ciudad pero no sede
-    if ciudad_id and not sede_id and input_transcript:
+    # PASO 1.5: EXTRAER SEDE con prioridad en sedes compuestas
+    if not sede_id and input_transcript:
         print("🔍 Intentando extraer sede...")
+        
+        # 🆕 NORMALIZAR INPUT PARA COMPARACIÓN
+        input_normalizado = normalizar_nombre(input_transcript.lower())
+        print(f"🔍 Input normalizado: '{input_normalizado}'")
+        
+        # 🆕 BUSCAR SEDES COMPUESTAS PRIMERO (MÁXIMA PRIORIDAD)
+        print("🔍 Buscando sedes compuestas...")
+        sedes_compuestas = obtener_sedes_compuestas()
+        print(f"🔍 Total sedes compuestas: {len(sedes_compuestas)}")
+        
+        # Verificar que "centro mayor" esté en el diccionario
+        if "centro mayor" in sedes_compuestas:
+            print("✅ 'centro mayor' está en sedes_compuestas")
+        else:
+            print("❌ 'centro mayor' NO está en sedes_compuestas")
+        
+        for sede_compuesta, datos_sede in sedes_compuestas.items():
+            sede_normalizada = normalizar_nombre(sede_compuesta)
+            print(f"🔍 Comparando '{sede_normalizada}' en '{input_normalizado}'")
+            
+            # Buscar la sede compuesta en el input (coincidencia exacta)
+            if sede_normalizada in input_normalizado:
+                sede_id = datos_sede["id"]
+                sede_nombre = datos_sede["nombre"]
+                session_attributes["sede_id"] = str(sede_id)
+                session_attributes["sede_nombre"] = sede_nombre
+                print(f"✅ Sede compuesta detectada: {sede_nombre} (ID: {sede_id})")
+                
+                # AUTO-DETECTAR CIUDAD POR SEDE
+                if not ciudad_id:
+                    ciudad_info = obtener_ciudad_fallback_por_sede(sede_id)
+                    if ciudad_info:
+                        ciudad_id = ciudad_info["id"]
+                        ciudad = ciudad_info["nombre"]
+                        session_attributes["ciudad_id"] = str(ciudad_id)
+                        session_attributes["ciudad_nombre"] = ciudad
+                        print(f"✅ Ciudad auto-detectada por sede: {ciudad} (ID: {ciudad_id})")
+                break
+        
+        # Log si no se encontró sede compuesta
+        if not sede_id:
+            print("❌ No se encontró ninguna sede compuesta en el input")
+        else:
+            print(f"✅ SEDE COMPUESTA ENCONTRADA - TERMINANDO BÚSQUEDA: {sede_nombre} (ID: {sede_id})")
+            # Si encontramos sede compuesta, NO continuar con búsquedas adicionales
+            # Actualizar session_attributes
+            session_attributes["sede_id"] = str(sede_id)
+            session_attributes["sede_nombre"] = sede_nombre
+            if ciudad_id:
+                session_attributes["ciudad_id"] = str(ciudad_id)
+                session_attributes["ciudad_nombre"] = ciudad
+            
+            return {
+                "session_attributes": session_attributes,
+                "ciudad_id": ciudad_id,
+                "ciudad_nombre": ciudad,
+                "sede_id": sede_id,
+                "sede_nombre": sede_nombre,
+                "clase_id": session_attributes.get("clase_id"),
+                "clase_nombre": session_attributes.get("clase_nombre"),
+                "fecha": session_attributes.get("fecha")
+            }
+    
+    # PASO 2: EXTRAER SEDE si tenemos ciudad pero no sede (Y no se encontró en sedes compuestas)
+    if not sede_id and input_transcript:
+        print("🔍 No se encontró sede compuesta, intentando búsqueda normal...")
         
         # Lista de sedes comunes COMPLETA
         palabras_sede = [
@@ -2886,6 +3030,3 @@ def extraer_y_validar_slots_sedes(input_transcript, session_attributes, intent):
                 "content": "¿En qué ciudad deseas consultar las sedes?"
             }]
         }
-
-
-
